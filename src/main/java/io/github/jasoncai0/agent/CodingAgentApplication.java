@@ -10,6 +10,7 @@ import io.github.jasoncai0.agent.config.AgentSettings;
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
 import io.github.jasoncai0.agent.config.ServerSettings;
+import io.github.jasoncai0.agent.language.Language;
 import io.github.jasoncai0.agent.llm.ChatMessage;
 import io.github.jasoncai0.agent.llm.ChatRequest;
 import io.github.jasoncai0.agent.llm.ChatResult;
@@ -92,6 +93,7 @@ public final class CodingAgentApplication {
                     + skills.all().stream().map(Skill::name).toList());
             ToolRegistry tools = BuiltInTools.registry();
             System.out.println("tools            " + tools.names().size() + " " + tools.names());
+            System.out.println("languages        " + String.join(", ", Language.displayNames()));
             Files.createDirectories(config.workspacesDir());
             System.out.println("workspaces       writable=" + Files.isWritable(config.workspacesDir()));
         } catch (RuntimeException | IOException e) {
@@ -109,6 +111,16 @@ public final class CodingAgentApplication {
         System.out.println("maven            " + (maven.success()
                 ? firstLine(maven.stdout())
                 : "not found (optional; Maven projects need mvn on PATH)"));
+        CommandRunner.CommandResult python = new CommandRunner().run(
+                List.of("python3", "--version"), config.projectRoot(), 10);
+        System.out.println("python3          " + (python.success()
+                ? python.combinedOutput(200).replace('\n', ' ').strip()
+                : "not found (Python workspaces need python3 on PATH)"));
+        CommandRunner.CommandResult node = new CommandRunner().run(
+                List.of("node", "--version"), config.projectRoot(), 10);
+        System.out.println("node             " + (node.success()
+                ? node.combinedOutput(200).replace('\n', ' ').strip()
+                : "not found (JavaScript workspaces need node on PATH)"));
         System.out.println();
         if (!javacResult.success()) {
             System.err.println("JDK compiler is required for the demo.");

@@ -17,6 +17,8 @@ public final class BuiltInTools {
                 new EditFileTool(),
                 new SearchTextTool(),
                 new RunCommandTool(),
+                new CompileCodeTool(),
+                new RunCodeTool(),
                 new CompileJavaTool(),
                 new RunJavaTool(),
                 new UpdatePlanTool(),

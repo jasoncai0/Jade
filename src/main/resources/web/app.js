@@ -218,6 +218,17 @@ function showEmpty() {
   $('emptyState').classList.remove('hidden');
   $('cancelBtn').hidden = true;
   setStreamState(null);
+  state.toolNodes.clear();
+  state.verification = null;
+  state.currentStep = 0;
+  state.usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  clearTimeline();
+  renderPlan([]);
+  renderFiles([]);
+  renderUsage();
+  $('statTurns').textContent = '0';
+  renderVerificationPending();
+  $('artifactLine').classList.add('hidden');
 }
 
 function renderRunList() {
@@ -410,7 +421,14 @@ function renderFiles(files) {
     button.type = 'button';
     button.title = file.path;
     const ext = file.path.includes('.') ? file.path.split('.').pop().toLowerCase() : '';
-    const glyph = el('span', 'file-glyph', ext === 'java' ? 'J' : ext === 'md' ? 'M' : ext === 'json' ? '{}' : ext === 'xml' ? '<>' : 'TXT');
+    const glyph = el('span', 'file-glyph',
+      ext === 'java' ? 'J'
+        : ext === 'py' ? 'PY'
+          : ext === 'js' ? 'JS'
+            : ext === 'md' ? 'M'
+              : ext === 'json' ? '{}'
+                : ext === 'xml' ? '<>'
+                  : 'TXT');
     const path = el('span', 'file-path', file.path);
     const size = el('span', 'file-size', formatSize(file.size));
     button.append(glyph, path, size);
@@ -1141,9 +1159,10 @@ function showHowItWorks() {
 
   const runtime = el('div', 'how-grid');
   const facts = [
-    ['Tool registration', 'Ten built-ins are registered in a ToolRegistry. Additional ToolProvider implementations are discovered at startup with Java ServiceLoader from META-INF/services.'],
+    ['Languages', 'The workspace is detected as Java, Python, or JavaScript from its source files. One run has one primary language; compile_code and run_code adapt to it.'],
+    ['Tool registration', 'Twelve built-ins are registered in a ToolRegistry. Additional ToolProvider implementations are discovered at startup with Java ServiceLoader from META-INF/services.'],
     ['Skill discovery', 'At startup Jade walks skills/**/SKILL.md, parses simple frontmatter, scores the catalog against the task, injects the top two playbooks, and exposes load_skill for on-demand reads.'],
-    ['Verification gate', 'After source edits, automatic verification runs Maven or javac through the real workspace. A failure is fed back to DeepSeek; success is the only path to a completed run.'],
+    ['Verification gate', 'After source edits, automatic verification runs Maven/javac, python3 -m py_compile, or node --check through the real workspace. A failure is fed back to DeepSeek; success is the only path to a completed run.'],
     ['Isolation limits', 'Each run gets a fresh agent-workspaces/run-* directory and all paths go through a workspace jail. Shell commands run with a sanitized environment and a destructive-command guard, but this is not an OS sandbox.'],
     ['Transport', 'The local HTTP server exposes a JSON API and an SSE event stream. The browser never receives the API key.']
   ];

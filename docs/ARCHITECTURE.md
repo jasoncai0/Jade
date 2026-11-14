@@ -20,7 +20,7 @@ AgentLoop ──────────────► DeepSeekClient ──►
    ├── ToolRegistry ──► built-in tools + ServiceLoader providers
    ├── SkillRegistry ─► skills/**/SKILL.md
    ├── ContextCompactor
-   ├── Verifier ──────► javac / Maven / java
+   ├── Verifier ──────► javac/Maven, py_compile, node --check, runtimes
    └── Workspace ─────► per-run directory under agent-workspaces/
 ```
 
@@ -94,14 +94,17 @@ message explaining the limit, so the assistant/tool pairing stays valid.
 ## 4. Verification gate
 
 `Verifier.verify()` is the only code path that decides whether a changed
-workspace is buildable:
+workspace is buildable. It detects the primary language from the source files
+(most files, tie order Java > Python > JavaScript):
 
-- If no Java source exists, return a skip result.
-- If `pom.xml` exists, run Maven compile (prefer `./mvnw`, fall back to `mvn`).
-- Otherwise, clear `.agent-build/classes` and run `javac` over all workspace
-  `.java` files.
-- `runMain()` puts `.agent-build/classes` (and `target/classes` when present) on
-  the classpath and starts `java`.
+- If no supported source exists, return a skip result.
+- Java with `pom.xml`: run Maven compile (prefer `./mvnw`, fall back to `mvn`).
+- Java otherwise: clear `.agent-build/classes` and run `javac` over all `.java`
+  files.
+- Python: run `python3 -m py_compile` over all `.py` files.
+- JavaScript: run `node --check` for each `.js` file.
+- `run()` executes `java <mainClass>` (Java) or `python3/node <entry file>`.
+  `runMain()` remains the Java-specific helper used by the `run_java` alias.
 
 The gate runs only when the model stops calling tools, and only if the workspace
 is dirty or has been touched. A failed build is converted into a user message:
@@ -119,7 +122,7 @@ cannot reuse a stale compile.
 
 There are two layers:
 
-1. **Static registration.** `BuiltInTools.all()` returns the ten built-ins.
+1. **Static registration.** `BuiltInTools.all()` returns the twelve built-ins.
    `BuiltInTools.registry()` registers each one and then calls
    `ToolRegistry.discover(...)`.
 2. **ServiceLoader discovery.** `ToolRegistry.discover` loads every

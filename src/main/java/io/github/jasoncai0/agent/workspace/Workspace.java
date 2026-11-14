@@ -27,7 +27,8 @@ import java.util.Set;
 public final class Workspace {
     private static final Set<String> SKIP_DIRS = Set.of(
             ".git", ".idea", ".gradle", ".mvn", ".agent", ".agent-build",
-            "target", "build", "out", "bin", "node_modules", "dist"
+            "target", "build", "out", "bin", "node_modules", "dist",
+            "__pycache__", ".venv", "venv", ".pytest_cache", ".mypy_cache"
     );
     private static final long MAX_READ_BYTES = 512 * 1024;
     private static final long MAX_WRITE_BYTES = 1024 * 1024;
@@ -243,6 +244,23 @@ public final class Workspace {
     }
 
     public List<Path> javaSources() {
+        return sourceFiles(".java");
+    }
+
+    /**
+     * Finds source files by suffix, skipping build, dependency, cache, and
+     * agent-internal directories. Used by the polyglot verifier.
+     */
+    public List<Path> sourceFiles(String... extensions) {
+        List<String> suffixes = new ArrayList<>();
+        for (String extension : extensions) {
+            if (extension != null && !extension.isBlank()) {
+                suffixes.add(extension.startsWith(".") ? extension : "." + extension);
+            }
+        }
+        if (suffixes.isEmpty()) {
+            return List.of();
+        }
         List<Path> sources = new ArrayList<>();
         try {
             Files.walkFileTree(root, Set.of(), Integer.MAX_VALUE, new SimpleFileVisitor<>() {
@@ -256,14 +274,21 @@ public final class Workspace {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    if (attrs.isRegularFile() && file.getFileName().toString().endsWith(".java")) {
-                        sources.add(file);
+                    if (!attrs.isRegularFile()) {
+                        return FileVisitResult.CONTINUE;
+                    }
+                    String name = file.getFileName().toString();
+                    for (String suffix : suffixes) {
+                        if (name.endsWith(suffix)) {
+                            sources.add(file);
+                            break;
+                        }
                     }
                     return FileVisitResult.CONTINUE;
                 }
             });
         } catch (IOException e) {
-            throw new WorkspaceException("Cannot scan Java sources: " + e.getMessage(), e);
+            throw new WorkspaceException("Cannot scan workspace sources: " + e.getMessage(), e);
         }
         sources.sort(Comparator.comparing(this::relativize));
         return sources;

@@ -1,9 +1,10 @@
-# Jade — a local Java coding agent
+# Jade — a local coding agent
 
 Jade is a small, runnable coding agent written in Java. It calls the DeepSeek
 chat-completions API, runs locally, and works on real files. A run can create a
-Java project, compile it with `javac` or Maven, execute the main class, read the
-real stdout, repair compile failures, and preserve the transcript.
+Java, Python, or JavaScript project, compile or syntax-check it with the real
+toolchain, execute it, read the real stdout, repair failures, and preserve the
+transcript.
 
 It is deliberately not Spring Boot. The whole application is a shaded jar with
 one external runtime dependency (Jackson) plus the JDK HTTP server and client,
@@ -13,6 +14,8 @@ so startup is one command.
 
 - JDK 21 or newer (`java`, `javac` on PATH)
 - Maven 3.9+
+- Python 3 (`python3` on PATH) for Python workspaces
+- Node.js 18+ (`node` on PATH) for JavaScript workspaces
 - A DeepSeek API key for real model calls
 
 The project was developed and tested with JDK 23.0.2 and Maven 3.9.9.
@@ -43,7 +46,7 @@ or written to logs.
 ## Headless use
 
 ```bash
-./run.sh --task "Create a Java CLI that prints the first 15 primes, compile it, and run it"
+./run.sh --task "Create a Python CLI that prints the first 15 primes, compile it, and run it"
 ./run.sh --task-file task.txt
 ./run.sh --task "..." --workspace prime-demo
 ./run.sh --task "..." --max-steps 6
@@ -152,9 +155,26 @@ ChatRequest request = new ChatRequest(
 JSON mode and strict schemas are transport constraints. They do not replace
 post-write `javac` verification or runtime tests.
 
+### Languages
+
+Jade supports Java, Python, and JavaScript workspaces. The primary language is
+detected from the source files (most files; ties prefer Java, then Python, then
+JavaScript), and one run targets one primary language:
+
+| Language | Syntax/build check | Default entry | Generic tools |
+|----------|--------------------|---------------|---------------|
+| Java | `javac` or Maven | `Main` class | `compile_code`, `run_code` |
+| Python | `python3 -m py_compile` | `main.py` | `compile_code`, `run_code` |
+| JavaScript | `node --check` per file | `main.js` | `compile_code`, `run_code` |
+
+`compile_java` and `run_java` remain as Java-only aliases. `run_code` can also
+take an explicit `language` and `entry`, which is useful when a workspace has
+several source files. Python and Node are discovered from `PATH`; override them
+with the `PYTHON` and `NODE` environment variables if needed.
+
 ### Tools
 
-Ten built-in tools are registered at startup:
+Twelve built-in tools are registered at startup:
 
 | Tool | Purpose |
 |------|---------|
@@ -164,8 +184,10 @@ Ten built-in tools are registered at startup:
 | `edit_file` | Replace one exact fragment; fails on ambiguity |
 | `search_text` | Literal or regex search with line numbers |
 | `run_command` | Run a shell command with timeout and output capture |
-| `compile_java` | Run the real verifier (`javac` or Maven) |
-| `run_java` | Compile if necessary, then run a main class |
+| `compile_code` | Compile or syntax-check Java, Python, or JavaScript |
+| `run_code` | Compile if needed, then run the language entry point |
+| `compile_java` | Java-only alias for the javac/Maven verifier |
+| `run_java` | Java-only alias for running a main class |
 | `update_plan` | Publish plan items and statuses |
 | `load_skill` | Load a full skill playbook on demand |
 
@@ -177,11 +199,13 @@ Ten built-in tools are registered at startup:
 Skills are markdown playbooks with YAML frontmatter. Jade discovers every
 `SKILL.md` under `skills/` (depth 3), puts a compact catalog in the system
 prompt, preloads the two best matches for the task, and exposes `load_skill` for
-on-demand loading. Three playbooks ship with the demo:
+on-demand loading. Five playbooks ship with the demo:
 
 - `skills/java-cli/SKILL.md` — build, compile, and execute a Java CLI
 - `skills/java-tdd/SKILL.md` — failing check first, then implementation
 - `skills/java-debug/SKILL.md` — compiler/runtime debugging discipline
+- `skills/python-cli/SKILL.md` — py_compile and execute a Python CLI
+- `skills/javascript-cli/SKILL.md` — node --check and execute a JavaScript CLI
 
 Minimal skill:
 
@@ -208,16 +232,19 @@ triggers:
 ### Verification gate
 
 A final answer is not trusted by itself. When the model stops calling tools and
-any source was edited, Jade runs a real build:
+any source was edited, Jade runs the real toolchain for the detected language:
 
-- `pom.xml` present: `mvn -q -DskipTests compile` (or `./mvnw`)
-- otherwise: `javac -encoding UTF-8 -d .agent-build/classes <sources>`
+- Java with `pom.xml`: `mvn -q -DskipTests compile` (or `./mvnw`)
+- Java otherwise: `javac -encoding UTF-8 -d .agent-build/classes <sources>`
+- Python: `python3 -m py_compile <sources>`
+- JavaScript: `node --check <file>` for every `.js` source
 
-If compilation fails, the compiler output is appended as a user message and
-the loop continues. The model must repair the source and finish again.
-`run_java` also compiles first when the workspace is dirty, then executes the
-class and returns the real stdout/stderr. A shell command invalidates an earlier
-verification, so `mvn test` followed by a source edit cannot silently pass.
+If compilation or syntax checking fails, the tool output is appended as a user
+message and the loop continues. The model must repair the source and finish
+again. `run_code` (and the Java alias `run_java`) also compiles first when the
+workspace is dirty, then executes the entry point and returns the real
+stdout/stderr. A shell command invalidates an earlier verification, so `mvn
+test` followed by a source edit cannot silently pass.
 
 ## Architecture
 
@@ -230,7 +257,7 @@ CodingAgentApplication
 │       ├── ToolRegistry          built-ins + ServiceLoader
 │       ├── SkillRegistry         SKILL.md discovery and ranking
 │       ├── ContextCompactor      budgeted, tool-pair-safe trimming
-│       ├── Verifier              javac / Maven compile and java run
+│       ├── Verifier              detect language; javac/Maven, py_compile, node --check
 │       └── Workspace             path jail and bounded file IO
 └── WebServer                     JDK HttpServer, REST envelope, SSE, static UI
 ```
@@ -356,7 +383,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 21 tests:
+The suite has 30 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -364,8 +391,10 @@ The suite has 21 tests:
 - context compaction without orphaned tool messages
 - DeepSeek request shape, JSON mode, strict tools, beta routing, and 401 behavior
   against a local mock HTTP server
-- the full agent loop with a scripted model: real `javac`, `run_java`, and a
-  compile-failure repair cycle
+- language detection and aliases; real Python `py_compile`, JavaScript
+  `node --check`, Java `javac`, and execution through the generic tools
+- the full agent loop with a scripted model: real `javac`, `run_java`, a Python
+  `run_code` path, and a compile-failure repair cycle
 - HTTP API and SSE replay against a real local server and a fake model
 - restart retention: a finished run is reloaded with its events, transcript, and files;
   an interrupted run is restored as `FAILED`
@@ -393,12 +422,13 @@ src/main/java/io/github/jasoncai0/agent/
   agent/                          ten-phase loop, state, events, artifacts, verifier
   cli/                            argument parsing and headless console
   config/                          env/.env, limits, logging
+  language/                       Java/Python/JavaScript detection and entry points
   llm/                            DeepSeek client and wire records
   skill/                          SKILL.md discovery and ranking
   tool/                           registry, SPI, schemas, built-in tools
   web/                            JDK HTTP server, REST, SSE, static assets
 src/main/resources/web/           console UI (no CDN)
-skills/                           three skill playbooks
+skills/                           five skill playbooks
 docs/                             architecture and demo script
 ```
 
@@ -407,8 +437,9 @@ docs/                             architecture and demo script
 - No authentication or multi-user tenancy; this is a local demo.
 - No OS-level process isolation. The command guard reduces accidents, not
   hostile code.
-- No debugger integration (`jdb`). Debugging means reading compiler/runtime
-  output, reproducing the failure, and repairing the source.
+- No debugger integration (`jdb`, `pdb`, Node inspector). Debugging means
+  reading compiler/runtime output, reproducing the failure, and repairing the
+  source.
 - No database or multi-session chat: completed runs are retained as read-only
   history; a follow-up starts a new isolated session rather than appending to
   the old transcript.

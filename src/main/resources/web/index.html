@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Jade · Java Coding Agent</title>
+  <title>Jade · Coding Agent</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -14,7 +14,7 @@
     <span class="brand-mark">J<span class="brand-dot"></span></span>
     <span class="brand-copy">
       <strong>JADE</strong>
-      <small>Java coding agent</small>
+      <small>Java · Python · JavaScript</small>
     </span>
   </a>
 
@@ -38,7 +38,7 @@
       <h1>What should it build?</h1>
       <label class="sr-only" for="taskInput">Task for the coding agent</label>
       <textarea id="taskInput" maxlength="20000" spellcheck="false"
-        placeholder="Create a Java CLI that prints the first 15 primes, then compile and run it to prove it works."></textarea>
+        placeholder="Create a Python CLI that prints the first 15 primes, then syntax-check and run it to prove it works."></textarea>
       <div class="composer-meta">
         <span id="charCount">0 / 20k</span>
         <span><kbd>⌘</kbd><kbd>↵</kbd> to run</span>
@@ -54,17 +54,17 @@
 
     <section class="examples-block" aria-label="Example tasks">
       <div class="eyebrow"><span class="eyebrow-line"></span>Try a task</div>
-      <button class="example" type="button" data-task="Create a Java CLI named PrimeCLI that prints the first 15 prime numbers, one per line. Compile it and run it to prove the output is correct.">
+      <button class="example" type="button" data-task="Create a Python CLI at main.py that prints the first 15 prime numbers, one per line. Syntax-check it with compile_code and run it to prove the output is correct.">
         <span class="example-index">01</span>
-        <span><strong>Prime CLI</strong><small>Write, compile, execute</small></span>
+        <span><strong>Python CLI</strong><small>py_compile + execute</small></span>
       </button>
-      <button class="example" type="button" data-task="Build a Java class FizzBuzz with a main method that prints 1 to 30 using Fizz, Buzz, and FizzBuzz rules. Compile and run it.">
+      <button class="example" type="button" data-task="Build a Node.js program at main.js that prints 1 to 30 using Fizz, Buzz, and FizzBuzz rules. Syntax-check it with node --check and run it.">
         <span class="example-index">02</span>
-        <span><strong>FizzBuzz</strong><small>A tiny runnable artifact</small></span>
+        <span><strong>JS FizzBuzz</strong><small>node --check + execute</small></span>
       </button>
-      <button class="example" type="button" data-task="Create a small Java JSON-ish key/value formatter. Include a main method with assertions that exits with code 1 when an assertion fails. Run it and show the output.">
+      <button class="example" type="button" data-task="Create a small Java assertion runner with a main method that exits with code 1 when an assertion fails. Compile it with javac and run it.">
         <span class="example-index">03</span>
-        <span><strong>Assertion runner</strong><small>Compile + test + run</small></span>
+        <span><strong>Java assertions</strong><small>javac + real exit code</small></span>
       </button>
     </section>
 
@@ -96,7 +96,7 @@
       <h2>Plan. Edit. Compile. Run.</h2>
       <p class="empty-lede">
         A ten-phase coding loop with real tools, real files, and a verification gate.
-        Nothing is reported as working until <code>javac</code> or <code>java</code> says so.
+        Nothing is reported as working until <code>javac</code>, <code>python3</code>, or <code>node</code> says so.
       </p>
       <div class="loop-strip" aria-label="Ten-phase loop">
         <span>Intake</span><i></i><span>Context</span><i></i><span>Skills</span><i></i><span>Plan</span><i></i>
@@ -104,8 +104,8 @@
         <span>Compact</span><i></i><span>Checkpoint</span>
       </div>
       <div class="empty-facts">
-        <div><strong id="emptyTools">10</strong><span>built-in tools</span></div>
-        <div><strong id="emptySkills">3</strong><span>discovered skills</span></div>
+        <div><strong id="emptyTools">12</strong><span>built-in tools</span></div>
+        <div><strong id="emptySkills">5</strong><span>discovered skills</span></div>
         <div><strong>10</strong><span>phases per turn</span></div>
         <div><strong>1</strong><span>isolated workspace</span></div>
       </div>
@@ -207,6 +207,7 @@
 
     <section class="card runtime-card">
       <div class="eyebrow"><span class="eyebrow-line"></span>Runtime</div>
+      <div class="runtime-row"><span>Languages</span><span>Java · Python · JS</span></div>
       <div class="runtime-row"><span>Discovery</span><span>ServiceLoader</span></div>
       <div class="runtime-row"><span>Skills</span><span>SKILL.md</span></div>
       <div class="runtime-row"><span>Isolation</span><span>per-run dir</span></div>

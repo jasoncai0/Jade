@@ -2,6 +2,7 @@ package io.github.jasoncai0.agent.agent;
 
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
+import io.github.jasoncai0.agent.language.Language;
 import io.github.jasoncai0.agent.llm.DeepSeekClient;
 import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.skill.Skill;
@@ -210,6 +211,7 @@ public final class AgentService implements AutoCloseable {
         summary.put("skillsDir", config.skillsDir().toString());
         summary.put("toolCount", tools.names().size());
         summary.put("skillCount", skills.all().size());
+        summary.put("languages", Language.ids());
         return summary;
     }
 

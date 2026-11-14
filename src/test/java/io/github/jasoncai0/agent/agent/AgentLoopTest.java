@@ -113,6 +113,32 @@ class AgentLoopTest {
         assertTrue(harness.workspace.readText("src/Main.java").contains("fixed"));
     }
 
+    @Test
+    void writesAndRunsPythonThroughTheGenericTools() throws Exception {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.script.add(toolResult("call-python-write", "write_file", Map.of(
+                "path", "main.py",
+                "content", "print('hello-python')\n")));
+        llm.script.add(toolResult("call-python-run", "run_code", Map.of(
+                "language", "python",
+                "entry", "main.py")));
+        llm.script.add(finalResult("Ran the Python program."));
+
+        Harness harness = harness(llm);
+        RunSnapshot snapshot = harness.loop.run("Create a Python CLI that prints hello-python",
+                harness.workspace, harness.state, harness.events, harness.control);
+
+        assertEquals("SUCCEEDED", snapshot.status());
+        assertTrue(snapshot.files().contains("main.py"));
+        assertTrue(snapshot.verification().contains("Already verified"));
+        String output = harness.events.snapshot().stream()
+                .filter(event -> event.type().equals("tool.end"))
+                .filter(event -> "run_code".equals(event.data().get("name")))
+                .map(event -> String.valueOf(event.data().get("output")))
+                .findFirst().orElse("");
+        assertTrue(output.contains("hello-python"), output);
+    }
+
     private Harness harness(LlmClient llm) {
         try {
             Path root = temp.resolve("ws");

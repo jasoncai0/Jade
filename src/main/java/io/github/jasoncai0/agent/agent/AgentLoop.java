@@ -312,7 +312,7 @@ public final class AgentLoop {
             return true;
         }
         if (context.verified() && !context.dirty()) {
-            String message = "Already verified by an earlier compile_java or run_java call.";
+            String message = "Already verified by an earlier compile_code or run_code call.";
             state.setVerification(message);
             log.emit("verification", eventMap("ok", true, "skipped", true, "summary", message,
                     "command", "", "output", "", "step", cycle));
@@ -340,23 +340,32 @@ public final class AgentLoop {
 
     private String verificationFeedback(String summary) {
         return "Automatic verification failed before the task can finish: " + summary + "\n"
-                + "Inspect the exact compiler output, fix the source with edit_file or write_file, "
-                + "then call compile_java or run_java again. Do not claim success until the build passes.";
+                + "Inspect the exact compiler/interpreter output, fix the source with edit_file or write_file, "
+                + "then call compile_code or run_code again. Do not claim success until the real toolchain passes.";
     }
 
     private String buildSystemPrompt(Workspace workspace, List<Skill> selected) {
         StringBuilder out = new StringBuilder();
         out.append("""
-                You are Jade, a local Java coding agent. You work on a real machine and your file edits
+                You are Jade, a local coding agent. You work on a real machine and your file edits
                 are really written to disk. You must make the artifact compile, run, and be tested.
+
+                ## Supported languages
+                - Java: .java; javac or Maven; entry is a main class.
+                - Python: .py; python3; entry is a relative file such as main.py.
+                - JavaScript: .js; Node.js; entry is a relative file such as main.js.
+                - Choose the language the user asks for. For a new program, use the requested language;
+                  do not default to Java. Keep one primary language per workspace unless asked to mix.
 
                 ## Hard rules
                 - Use the provided tools for every file read, write, and command. Never claim an action you did not take.
                 - Use relative paths inside the workspace. The workspace root is: %s
                 - Keep changes focused. Read files before editing them; prefer edit_file over rewriting.
                 - Maintain the visible plan with update_plan at the start and after milestones.
-                - For Java work, compile with compile_java or Maven, fix real compiler errors, and run the
-                  main class with run_java. Use run_command for tests such as `mvn test`.
+                - Compile or syntax-check with compile_code, then run with run_code. Both detect the language
+                  automatically; pass language=java/python/javascript when you need to be explicit.
+                - compile_java and run_java remain available as Java-only aliases. Use run_command for tests
+                  such as `mvn test` or `python3 -m pytest`.
                 - Before your final answer, the framework automatically verifies the workspace if any source
                   changed. If verification fails, the failure is fed back to you. Fix it, then finish.
                 - If an installed skill is relevant, load it with load_skill. Skills are instructions, not tools.
