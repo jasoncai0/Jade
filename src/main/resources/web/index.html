@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Jade · Java Coding Agent</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/" aria-label="Jade home">
+    <span class="brand-mark">J<span class="brand-dot"></span></span>
+    <span class="brand-copy">
+      <strong>JADE</strong>
+      <small>Java coding agent</small>
+    </span>
+  </a>
+
+  <div class="topbar-meta">
+    <span class="pill model-pill" id="modelPill">deepseek-chat</span>
+    <span class="pill key-pill" id="keyPill"><span class="dot"></span><span id="keyText">checking key</span></span>
+  </div>
+
+  <nav class="topbar-actions" aria-label="Agent resources">
+    <button class="ghost" id="howBtn" type="button">How it works</button>
+    <button class="ghost" id="skillsBtn" type="button">Skills</button>
+    <button class="ghost" id="toolsBtn" type="button">Tools</button>
+    <button class="accent-ghost" id="newRunBtn" type="button">New run</button>
+  </nav>
+</header>
+
+<div class="app-shell">
+  <aside class="left-rail">
+    <section class="card composer-card">
+      <div class="eyebrow"><span class="eyebrow-line"></span>New run</div>
+      <h1>What should it build?</h1>
+      <label class="sr-only" for="taskInput">Task for the coding agent</label>
+      <textarea id="taskInput" maxlength="20000" spellcheck="false"
+        placeholder="Create a Java CLI that prints the first 15 primes, then compile and run it to prove it works."></textarea>
+      <div class="composer-meta">
+        <span id="charCount">0 / 20k</span>
+        <span><kbd>⌘</kbd><kbd>↵</kbd> to run</span>
+      </div>
+      <button class="primary" id="startBtn" type="button">
+        <span>Start agent</span>
+        <span class="primary-arrow" aria-hidden="true">→</span>
+      </button>
+      <p class="warning hidden" id="keyWarning">
+        No <code>DEEPSEEK_API_KEY</code> found. Copy <code>.env.example</code> to <code>.env</code>, set the key, then restart.
+      </p>
+    </section>
+
+    <section class="examples-block" aria-label="Example tasks">
+      <div class="eyebrow"><span class="eyebrow-line"></span>Try a task</div>
+      <button class="example" type="button" data-task="Create a Java CLI named PrimeCLI that prints the first 15 prime numbers, one per line. Compile it and run it to prove the output is correct.">
+        <span class="example-index">01</span>
+        <span><strong>Prime CLI</strong><small>Write, compile, execute</small></span>
+      </button>
+      <button class="example" type="button" data-task="Build a Java class FizzBuzz with a main method that prints 1 to 30 using Fizz, Buzz, and FizzBuzz rules. Compile and run it.">
+        <span class="example-index">02</span>
+        <span><strong>FizzBuzz</strong><small>A tiny runnable artifact</small></span>
+      </button>
+      <button class="example" type="button" data-task="Create a small Java JSON-ish key/value formatter. Include a main method with assertions that exits with code 1 when an assertion fails. Run it and show the output.">
+        <span class="example-index">03</span>
+        <span><strong>Assertion runner</strong><small>Compile + test + run</small></span>
+      </button>
+    </section>
+
+    <section class="runs-block">
+      <div class="section-head">
+        <div class="eyebrow"><span class="eyebrow-line"></span>Runs</div>
+        <span class="count" id="runCount">0</span>
+      </div>
+      <div id="runList" class="run-list">
+        <p class="empty-note">No runs yet. Start one above.</p>
+      </div>
+    </section>
+
+    <footer class="rail-footer">
+      <span>Jade 1.0.0</span>
+      <span>Local · DeepSeek tool calling</span>
+    </footer>
+  </aside>
+
+  <main class="stage">
+    <section id="emptyState" class="empty-state">
+      <div class="empty-visual" aria-hidden="true">
+        <span class="empty-code">&lt;/&gt;</span>
+        <span class="empty-orbit orbit-one"></span>
+        <span class="empty-orbit orbit-two"></span>
+      </div>
+      <div class="eyebrow"><span class="eyebrow-line"></span>Local agent runtime</div>
+      <h2>Plan. Edit. Compile. Run.</h2>
+      <p class="empty-lede">
+        A ten-phase coding loop with real tools, real files, and a verification gate.
+        Nothing is reported as working until <code>javac</code> or <code>java</code> says so.
+      </p>
+      <div class="loop-strip" aria-label="Ten-phase loop">
+        <span>Intake</span><i></i><span>Context</span><i></i><span>Skills</span><i></i><span>Plan</span><i></i>
+        <span>Model</span><i></i><span>Tools</span><i></i><span>Observe</span><i></i><span>Verify</span><i></i>
+        <span>Compact</span><i></i><span>Checkpoint</span>
+      </div>
+      <div class="empty-facts">
+        <div><strong id="emptyTools">10</strong><span>built-in tools</span></div>
+        <div><strong id="emptySkills">3</strong><span>discovered skills</span></div>
+        <div><strong>10</strong><span>phases per turn</span></div>
+        <div><strong>1</strong><span>isolated workspace</span></div>
+      </div>
+      <p class="empty-hint">Pick an example on the left, or write your own task. <kbd>⌘</kbd><kbd>↵</kbd></p>
+    </section>
+
+    <section id="runView" class="run-view hidden">
+      <header class="run-header">
+        <div class="run-heading">
+          <div class="eyebrow"><span class="eyebrow-line live"></span>Live run <span class="run-id" id="runId"></span></div>
+          <h2 id="runTask">Untitled task</h2>
+        </div>
+        <div class="run-header-actions">
+          <span class="status-badge" id="runStatus"><span class="status-dot"></span><span id="runStatusText">queued</span></span>
+          <button class="ghost danger-ghost" id="cancelBtn" type="button">Cancel</button>
+        </div>
+      </header>
+      <div class="run-meta">
+        <span class="meta-item"><span class="meta-label">workspace</span><code id="runWorkspace">—</code></span>
+        <span class="meta-item"><span class="meta-label">turn</span><span id="runTurn">0 / 10</span></span>
+        <span class="meta-item"><span class="meta-label">elapsed</span><span id="runElapsed">00:00</span></span>
+        <span class="meta-item"><span class="meta-label">stream</span><span id="streamState" class="stream-state">connecting</span></span>
+      </div>
+
+      <section class="card phase-card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow"><span class="eyebrow-line"></span>Ten-phase loop</div>
+            <p class="card-sub">Every model turn runs the whole pipeline. The loop is capped at ten turns.</p>
+          </div>
+          <div class="turn-readout" id="turnReadout">Turn 0 / 10</div>
+        </div>
+        <div class="phase-grid" id="phaseGrid"></div>
+        <div class="phase-detail" id="phaseDetail">
+          <span class="phase-detail-label">waiting</span>
+          <span id="phaseDetailText">The agent has not started yet.</span>
+        </div>
+      </section>
+
+      <section class="card timeline-card">
+        <div class="card-head">
+          <div>
+            <div class="eyebrow"><span class="eyebrow-line"></span>Live trace</div>
+            <p class="card-sub">Model decisions, tool calls, compilation output, and the verification gate.</p>
+          </div>
+          <span class="trace-count" id="traceCount">0 events</span>
+        </div>
+        <div class="timeline" id="timeline" aria-live="polite">
+          <div class="timeline-empty" id="timelineEmpty">
+            <span class="scanner"></span>
+            Waiting for the first event…
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <aside class="inspector">
+    <section class="card plan-card">
+      <div class="card-head compact">
+        <div class="eyebrow"><span class="eyebrow-line"></span>Plan</div>
+        <span class="count" id="planCount">0</span>
+      </div>
+      <ol class="plan-list" id="planList">
+        <li class="empty-note">The agent will publish its plan here.</li>
+      </ol>
+    </section>
+
+    <section class="card files-card">
+      <div class="card-head compact">
+        <div class="eyebrow"><span class="eyebrow-line"></span>Workspace</div>
+        <span class="count" id="fileCount">0</span>
+      </div>
+      <div class="file-list" id="fileList">
+        <p class="empty-note">No files yet.</p>
+      </div>
+    </section>
+
+    <section class="card stats-card">
+      <div class="card-head compact">
+        <div class="eyebrow"><span class="eyebrow-line"></span>Telemetry</div>
+        <span class="live-dot" id="telemetryLive"></span>
+      </div>
+      <dl class="stat-grid">
+        <div><dt>prompt</dt><dd id="statPrompt">0</dd></div>
+        <div><dt>completion</dt><dd id="statCompletion">0</dd></div>
+        <div><dt>total tok</dt><dd id="statTotal">0</dd></div>
+        <div><dt>turns</dt><dd id="statTurns">0</dd></div>
+      </dl>
+      <div class="verify-panel" id="verifyPanel">
+        <div class="verify-line"><span class="verify-mark pending">○</span><span>Not verified yet</span></div>
+        <p>Auto-verify runs after source edits. A failed build goes back to the model.</p>
+      </div>
+      <div class="artifact-line hidden" id="artifactLine">
+        <span class="meta-label">transcript</span>
+        <code id="artifactPath"></code>
+      </div>
+    </section>
+
+    <section class="card runtime-card">
+      <div class="eyebrow"><span class="eyebrow-line"></span>Runtime</div>
+      <div class="runtime-row"><span>Discovery</span><span>ServiceLoader</span></div>
+      <div class="runtime-row"><span>Skills</span><span>SKILL.md</span></div>
+      <div class="runtime-row"><span>Isolation</span><span>per-run dir</span></div>
+      <div class="runtime-row"><span>Transport</span><span>SSE</span></div>
+    </section>
+  </aside>
+</div>
+
+<div class="modal-backdrop hidden" id="modalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" id="modal">
+    <header class="modal-head">
+      <div>
+        <div class="eyebrow"><span class="eyebrow-line"></span>Agent resources</div>
+        <h3 id="modalTitle">Resources</h3>
+      </div>
+      <button class="icon-button" id="modalClose" type="button" aria-label="Close dialog">×</button>
+    </header>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

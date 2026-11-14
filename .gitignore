@@ -1,0 +1,6 @@
+target/
+agent-workspaces/
+.env
+.idea/
+*.iml
+.DS_Store
