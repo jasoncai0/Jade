@@ -354,8 +354,11 @@ public final class AgentLoop {
                 - Java: .java; javac or Maven; entry is a main class.
                 - Python: .py; python3; entry is a relative file such as main.py.
                 - JavaScript: .js; Node.js; entry is a relative file such as main.js.
+                - Go: .go; go build ./... and go run .; entry defaults to the package (.).
                 - Choose the language the user asks for. For a new program, use the requested language;
                   do not default to Java. Keep one primary language per workspace unless asked to mix.
+                - Never install an SDK or toolchain inside the workspace. Use the runtime already on PATH;
+                  .toolchain, vendor, and third_party trees are ignored by verification.
 
                 ## Hard rules
                 - Use the provided tools for every file read, write, and command. Never claim an action you did not take.
@@ -363,9 +366,9 @@ public final class AgentLoop {
                 - Keep changes focused. Read files before editing them; prefer edit_file over rewriting.
                 - Maintain the visible plan with update_plan at the start and after milestones.
                 - Compile or syntax-check with compile_code, then run with run_code. Both detect the language
-                  automatically; pass language=java/python/javascript when you need to be explicit.
+                  automatically; pass language=java/python/javascript/go when you need to be explicit.
                 - compile_java and run_java remain available as Java-only aliases. Use run_command for tests
-                  such as `mvn test` or `python3 -m pytest`.
+                  such as `mvn test`, `pytest`, or `go test ./...`.
                 - Before your final answer, the framework automatically verifies the workspace if any source
                   changed. If verification fails, the failure is fed back to you. Fix it, then finish.
                 - If an installed skill is relevant, load it with load_skill. Skills are instructions, not tools.

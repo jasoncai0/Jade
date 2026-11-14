@@ -17,7 +17,8 @@ import java.util.Optional;
 public enum Language {
     JAVA("java", "Java", ".java", List.of("Main.java", "src/Main.java")),
     PYTHON("python", "Python", ".py", List.of("main.py", "src/main.py", "app.py")),
-    JAVASCRIPT("javascript", "JavaScript", ".js", List.of("main.js", "index.js", "src/main.js"));
+    JAVASCRIPT("javascript", "JavaScript", ".js", List.of("main.js", "index.js", "src/main.js")),
+    GO("go", "Go", ".go", List.of("main.go"));
 
     private final String id;
     private final String displayName;
@@ -67,6 +68,7 @@ public enum Language {
             case "java" -> Optional.of(JAVA);
             case "python", "python3", "py" -> Optional.of(PYTHON);
             case "javascript", "js", "node", "nodejs" -> Optional.of(JAVASCRIPT);
+            case "go", "golang" -> Optional.of(GO);
             default -> Optional.empty();
         };
     }
@@ -81,6 +83,9 @@ public enum Language {
         }
         if (lower.endsWith(".js")) {
             return JAVASCRIPT;
+        }
+        if (lower.endsWith(".go")) {
+            return GO;
         }
         return null;
     }

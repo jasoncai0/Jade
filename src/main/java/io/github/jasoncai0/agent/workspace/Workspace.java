@@ -28,7 +28,9 @@ public final class Workspace {
     private static final Set<String> SKIP_DIRS = Set.of(
             ".git", ".idea", ".gradle", ".mvn", ".agent", ".agent-build",
             "target", "build", "out", "bin", "node_modules", "dist",
-            "__pycache__", ".venv", "venv", ".pytest_cache", ".mypy_cache"
+            "__pycache__", ".venv", "venv", ".pytest_cache", ".mypy_cache",
+            ".toolchain", ".sdk", ".sdkman", ".nvm", ".rustup", ".cargo",
+            "vendor", "third_party", ".pnpm-store", ".yarn"
     );
     private static final long MAX_READ_BYTES = 512 * 1024;
     private static final long MAX_WRITE_BYTES = 1024 * 1024;

@@ -50,6 +50,30 @@ class MultiLanguageVerifierTest {
     }
 
     @Test
+    void verifiesAndRunsGo() throws Exception {
+        Workspace workspace = Workspace.open(temp.resolve("go"));
+        workspace.writeText("main.go", """
+                package main
+
+                import "fmt"
+
+                func main() {
+                    fmt.Println("hello-go")
+                }
+                """);
+        assertEquals(Language.GO, verifier.detect(workspace));
+
+        Verifier.VerificationResult compiled = verifier.verify(workspace, Language.GO, 60);
+        assertTrue(compiled.ok(), compiled.summary() + "\n" + compiled.output());
+        assertTrue(compiled.summary().contains("go build passed"));
+        assertTrue(workspace.exists("go.mod"), "module-less Go demos get a minimal go.mod");
+
+        CommandRunner.CommandResult run = verifier.run(workspace, Language.GO, "", "", 60);
+        assertEquals(0, run.exitCode(), run.stderr());
+        assertTrue(run.stdout().contains("hello-go"), run.stdout());
+    }
+
+    @Test
     void reportsSyntaxErrorsFromTheRealInterpreter() throws Exception {
         Workspace workspace = Workspace.open(temp.resolve("broken-python"));
         workspace.writeText("main.py", "def broken(:\n    pass\n");

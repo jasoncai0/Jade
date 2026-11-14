@@ -19,7 +19,9 @@ class LanguageTest {
         assertEquals(Language.PYTHON, Language.fromId("python3").orElseThrow());
         assertEquals(Language.PYTHON, Language.fromId("py").orElseThrow());
         assertEquals(Language.JAVASCRIPT, Language.fromId("node").orElseThrow());
+        assertEquals(Language.GO, Language.fromId("golang").orElseThrow());
         assertEquals(Language.JAVASCRIPT, Language.fromPath("src/app.js"));
+        assertEquals(Language.GO, Language.fromPath("main.go"));
         assertEquals(Language.JAVA, Language.fromPath("Main.java"));
         assertNull(Language.fromPath("README.md"));
     }
@@ -43,9 +45,10 @@ class LanguageTest {
 
     @Test
     void exposesSupportedLanguagesAndEntryCandidates() {
-        assertEquals(List.of("java", "python", "javascript"), Language.ids());
-        assertEquals(List.of("Java", "Python", "JavaScript"), Language.displayNames());
+        assertEquals(List.of("java", "python", "javascript", "go"), Language.ids());
+        assertEquals(List.of("Java", "Python", "JavaScript", "Go"), Language.displayNames());
         assertEquals(".py", Language.PYTHON.extension());
+        assertEquals(".go", Language.GO.extension());
         assertEquals(List.of("main.py", "src/main.py", "app.py"), Language.PYTHON.entryCandidates());
     }
 }

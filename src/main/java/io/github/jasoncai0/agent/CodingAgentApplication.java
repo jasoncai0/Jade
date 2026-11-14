@@ -86,6 +86,7 @@ public final class CodingAgentApplication {
                 : "MISSING (set DEEPSEEK_API_KEY in .env; real runs will fail)"));
         System.out.println("max turns        " + config.agent().maxSteps());
         System.out.println("auto verify      " + config.agent().autoVerify());
+        System.out.println("sandbox          " + new CommandRunner().sandbox().description());
 
         try {
             SkillRegistry skills = SkillRegistry.load(config.skillsDir());
@@ -121,6 +122,11 @@ public final class CodingAgentApplication {
         System.out.println("node             " + (node.success()
                 ? node.combinedOutput(200).replace('\n', ' ').strip()
                 : "not found (JavaScript workspaces need node on PATH)"));
+        CommandRunner.CommandResult go = new CommandRunner().run(
+                List.of("go", "version"), config.projectRoot(), 10);
+        System.out.println("go               " + (go.success()
+                ? go.combinedOutput(200).replace('\n', ' ').strip()
+                : "not found (Go workspaces need go on PATH)"));
         System.out.println();
         if (!javacResult.success()) {
             System.err.println("JDK compiler is required for the demo.");
@@ -155,7 +161,7 @@ public final class CodingAgentApplication {
             webServer = new WebServer(agentService, config.server());
             webServer.start();
             System.out.println();
-            System.out.println("Jade - Java Coding Agent " + AppConfig.VERSION);
+            System.out.println("Jade - Coding Agent " + AppConfig.VERSION);
             System.out.println("Web console  " + webServer.url());
             System.out.println("Model        " + config.llm().model());
             System.out.println("Skills       " + agentService.skills().all().size() + " | Tools "

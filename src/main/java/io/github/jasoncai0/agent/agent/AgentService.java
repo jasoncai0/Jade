@@ -9,6 +9,8 @@ import io.github.jasoncai0.agent.skill.Skill;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.tool.ToolRegistry;
 import io.github.jasoncai0.agent.tool.builtin.BuiltInTools;
+import io.github.jasoncai0.agent.workspace.CommandRunner;
+import io.github.jasoncai0.agent.workspace.CommandSandbox;
 import io.github.jasoncai0.agent.workspace.Workspace;
 
 import java.io.IOException;
@@ -212,6 +214,10 @@ public final class AgentService implements AutoCloseable {
         summary.put("toolCount", tools.names().size());
         summary.put("skillCount", skills.all().size());
         summary.put("languages", Language.ids());
+        CommandSandbox sandbox = new CommandRunner().sandbox();
+        summary.put("sandbox", sandbox.modeName());
+        summary.put("sandboxNetwork", sandbox.networkEnabled());
+        summary.put("sandboxDescription", sandbox.description());
         return summary;
     }
 

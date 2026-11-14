@@ -23,8 +23,8 @@ public final class CompileCodeTool implements Tool {
         return new ToolSpec(
                 "compile_code",
                 "Compile or syntax-check the workspace using the detected language. "
-                        + "Java: javac or Maven; Python: python3 -m py_compile; JavaScript: node --check. "
-                        + "Use this for any language; compile_java remains a Java-only alias.",
+                        + "Java: javac or Maven; Python: python3 -m py_compile; JavaScript: node --check; "
+                        + "Go: go build ./.... Use this for any language; compile_java remains a Java-only alias.",
                 Schemas.object(Schemas.properties(
                         "language", Schemas.stringEnum(
                                 "Optional language override. Omit to detect from source files.",
@@ -51,7 +51,7 @@ public final class CompileCodeTool implements Tool {
             language = parsed.get();
         }
         if (language == null) {
-            return ToolResult.error("No supported source files found. Create a .java, .py, or .js file first.");
+            return ToolResult.error("No supported source files found. Create a .java, .py, .js, or .go file first.");
         }
 
         Verifier.VerificationResult result = context.verifier()

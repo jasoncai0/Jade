@@ -17,6 +17,19 @@ import java.util.regex.Pattern;
 
 public final class CommandRunner {
     private static final int MAX_CAPTURE_CHARS = 200_000;
+    private final CommandSandbox sandbox;
+
+    public CommandRunner() {
+        this(CommandSandbox.fromEnvironment());
+    }
+
+    public CommandRunner(CommandSandbox sandbox) {
+        this.sandbox = sandbox == null ? CommandSandbox.fromEnvironment() : sandbox;
+    }
+
+    public CommandSandbox sandbox() {
+        return sandbox;
+    }
     private static final boolean WINDOWS = System.getProperty("os.name", "")
             .toLowerCase().contains("win");
     private static final Set<String> SENSITIVE_EXACT = Set.of(
@@ -33,13 +46,37 @@ public final class CommandRunner {
     );
 
     public CommandResult run(List<String> argv, Path cwd, int timeoutSeconds) {
+        return run(argv, cwd, timeoutSeconds, cwd);
+    }
+
+    /**
+     * Runs a command with writes confined to {@code writableRoot} when the OS
+     * sandbox is active. The original argv is returned for display; the wrapped
+     * argv is never copied into the result.
+     */
+    public CommandResult run(List<String> argv, Path cwd, int timeoutSeconds, Path writableRoot) {
+        return run(argv, cwd, timeoutSeconds, writableRoot, Map.of());
+    }
+
+    /** Runs a command with extra environment variables applied after the sandbox setup. */
+    public CommandResult run(List<String> argv, Path cwd, int timeoutSeconds,
+                             Path writableRoot, Map<String, String> extraEnvironment) {
         if (argv == null || argv.isEmpty()) {
             throw new CommandRejectedException("Command must not be empty");
         }
         int timeout = Math.max(1, Math.min(timeoutSeconds, 600));
-        ProcessBuilder builder = new ProcessBuilder(argv);
+        Path root = writableRoot == null ? cwd : writableRoot;
+        ProcessBuilder builder = new ProcessBuilder(sandbox.wrap(argv, root));
         builder.directory(cwd.toFile());
         sanitizeEnvironment(builder.environment());
+        sandbox.prepare(builder, root);
+        if (extraEnvironment != null) {
+            extraEnvironment.forEach((key, value) -> {
+                if (key != null && value != null) {
+                    builder.environment().put(key, value);
+                }
+            });
+        }
         long started = System.nanoTime();
         Process process;
         try {
@@ -99,6 +136,10 @@ public final class CommandRunner {
     }
 
     public CommandResult runShell(String command, Path cwd, int timeoutSeconds) {
+        return runShell(command, cwd, timeoutSeconds, cwd);
+    }
+
+    public CommandResult runShell(String command, Path cwd, int timeoutSeconds, Path writableRoot) {
         if (command == null || command.isBlank()) {
             throw new CommandRejectedException("Command must not be blank");
         }
@@ -106,7 +147,7 @@ public final class CommandRunner {
         List<String> argv = WINDOWS
                 ? List.of("cmd.exe", "/c", command)
                 : List.of("/bin/sh", "-c", command);
-        return run(argv, cwd, timeoutSeconds);
+        return run(argv, cwd, timeoutSeconds, writableRoot, Map.of());
     }
 
     public static void guard(String command) {

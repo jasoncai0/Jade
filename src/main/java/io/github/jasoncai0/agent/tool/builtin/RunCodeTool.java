@@ -24,14 +24,15 @@ public final class RunCodeTool implements Tool {
         return new ToolSpec(
                 "run_code",
                 "Compile if needed, then run a program. Java entry is a fully qualified main class; "
-                        + "Python/JavaScript entry is a relative file such as main.py or main.js. "
-                        + "Omit language to detect it; entry defaults to Main.java/Main.py/Main.js conventions.",
+                        + "Python/JavaScript entry is a relative file such as main.py or main.js; "
+                        + "Go entry defaults to the current module/package (use .). "
+                        + "Omit language to detect it; entry defaults to conventional files.",
                 Schemas.object(Schemas.properties(
                         "language", Schemas.stringEnum(
-                                "Optional language id: java, python, or javascript.",
+                                "Optional language id: java, python, javascript, or go.",
                                 Language.ids()),
                         "entry", Schemas.string(
-                                "Java main class, or Python/JavaScript relative source file."),
+                                "Java main class, Python/JavaScript relative source file, or Go package (.)."),
                         "args", Schemas.string("Space-separated program arguments."),
                         "timeoutSeconds", Schemas.integer("Run timeout.", 1, 600)
                 ))
@@ -55,7 +56,7 @@ public final class RunCodeTool implements Tool {
             language = parsed.get();
         }
         if (language == null) {
-            return ToolResult.error("No supported source files found. Create a .java, .py, or .js file first.");
+            return ToolResult.error("No supported source files found. Create a .java, .py, .js, or .go file first.");
         }
         if (language == Language.JAVA) {
             if (entry.isBlank()) {
@@ -64,6 +65,8 @@ public final class RunCodeTool implements Tool {
             if (!entry.matches("[A-Za-z_$][\\w$]*(\\.[A-Za-z_$][\\w$]*)*")) {
                 return ToolResult.error("Invalid Java class name: " + entry);
             }
+        } else if (language == Language.GO && entry.isBlank()) {
+            entry = ".";
         }
 
         String programArgs = ToolArgs.string(args, "args", "");

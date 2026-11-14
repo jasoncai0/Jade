@@ -59,6 +59,7 @@ class WorkspaceTest {
         workspace.writeText("src/Main.java", "public class Main {}\n");
         workspace.writeText("target/Stale.java", "class Stale {}\n");
         workspace.writeText(".agent-build/classes/Generated.java", "class Generated {}\n");
+        workspace.writeText(".toolchain/go/src/sdk.js", "console.log('sdk');\n");
         workspace.writeText("notes.txt", "not java\n");
 
         List<Path> sources = workspace.javaSources();
@@ -67,5 +68,6 @@ class WorkspaceTest {
         assertTrue(workspace.relativize(sources.get(0)).endsWith("src/Main.java"));
         assertFalse(workspace.listFiles(100, 8).stream()
                 .anyMatch(entry -> entry.path().startsWith("target")));
+        assertTrue(workspace.sourceFiles(".js").isEmpty(), "SDK trees must not become sources");
     }
 }

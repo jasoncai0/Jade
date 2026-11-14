@@ -37,7 +37,7 @@ public final class Verifier {
      * order in {@link Language}: Java, Python, JavaScript.
      */
     public Language detect(Workspace workspace) {
-        return Language.detect(workspace.sourceFiles(".java", ".py", ".js"));
+        return Language.detect(workspace.sourceFiles(".java", ".py", ".js", ".go"));
     }
 
     /**
@@ -49,7 +49,7 @@ public final class Verifier {
         if (language == null) {
             return new VerificationResult(true,
                     "No supported source files found; nothing to compile.",
-                    "", "(no .java, .py, or .js sources)", 0);
+                    "", "(no .java, .py, .js, or .go sources)", 0);
         }
         return verify(workspace, language, timeoutSeconds);
     }
@@ -62,6 +62,7 @@ public final class Verifier {
             case JAVA -> verifyJava(workspace, timeoutSeconds);
             case PYTHON -> verifyPython(workspace, timeoutSeconds);
             case JAVASCRIPT -> verifyJavaScript(workspace, timeoutSeconds);
+            case GO -> verifyGo(workspace, timeoutSeconds);
         };
     }
 
@@ -139,6 +140,37 @@ public final class Verifier {
                 "node --check " + sources.size() + " file(s)", output.toString(), durationMs);
     }
 
+    private VerificationResult verifyGo(Workspace workspace, int timeoutSeconds) {
+        List<Path> sources = workspace.sourceFiles(".go");
+        if (sources.isEmpty()) {
+            return new VerificationResult(true, "No Go sources found; nothing to compile.",
+                    "", "(no Go sources)", 0);
+        }
+        if (sources.size() > MAX_SOURCE_FILES) {
+            return new VerificationResult(false,
+                    "Too many Go source files to verify: " + sources.size()
+                            + " (maximum " + MAX_SOURCE_FILES + ").",
+                    "", "(not run)", 0);
+        }
+        ensureGoModule(workspace);
+        String go = goExecutable();
+        List<String> command = new ArrayList<>();
+        command.add(go);
+        command.add("build");
+        command.add("./...");
+        try {
+            CommandRunner.CommandResult result = runner.run(command, workspace.root(), timeoutSeconds,
+                    workspace.root(), goEnvironment(workspace));
+            String output = result.combinedOutput(18_000);
+            return new VerificationResult(result.success(),
+                    result.success() ? "go build passed (" + sources.size() + " file(s))." : "go build failed.",
+                    result.commandLine(), output, result.durationMs());
+        } catch (CommandRunner.CommandRejectedException e) {
+            return new VerificationResult(false, "Cannot run go: " + e.getMessage(),
+                    String.join(" ", command), e.getMessage(), 0);
+        }
+    }
+
     private VerificationResult verifyMaven(Workspace workspace, int timeoutSeconds) {
         List<String> command = new ArrayList<>();
         Path wrapper = workspace.root().resolve("mvnw");
@@ -214,6 +246,26 @@ public final class Verifier {
             String mainClass = entry == null || entry.isBlank() ? "Main" : entry.strip();
             return runMain(workspace, mainClass, args, timeoutSeconds);
         }
+        if (language == Language.GO) {
+            ensureGoModule(workspace);
+            String target = entry == null || entry.isBlank() ? "." : entry.strip();
+            if (!target.equals(".")) {
+                Path resolved = workspace.resolve(target);
+                if (!Files.exists(resolved)) {
+                    throw new IllegalArgumentException("Go entry does not exist: " + target);
+                }
+                target = workspace.relativize(resolved);
+            }
+            List<String> command = new ArrayList<>();
+            command.add(goExecutable());
+            command.add("run");
+            command.add(target);
+            if (args != null && !args.isBlank()) {
+                command.addAll(List.of(args.strip().split("\\s+")));
+            }
+            return runner.run(command, workspace.root(), timeoutSeconds,
+                    workspace.root(), goEnvironment(workspace));
+        }
         String file = entry == null || entry.isBlank() ? language.defaultEntry(workspace) : entry.strip();
         if (file == null) {
             throw new IllegalArgumentException("No " + language.displayName() + " entry point found.");
@@ -267,6 +319,30 @@ public final class Verifier {
     private static String nodeExecutable() {
         String configured = System.getenv("NODE");
         return configured == null || configured.isBlank() ? "node" : configured.strip();
+    }
+
+    private static Map<String, String> goEnvironment(Workspace workspace) {
+        return Files.exists(workspace.root().resolve("go.mod"))
+                ? Map.of()
+                : Map.of("GO111MODULE", "off");
+    }
+
+    /** Gives module-less single-file demos a minimal module so raw go commands work too. */
+    private static void ensureGoModule(Workspace workspace) {
+        if (Files.exists(workspace.root().resolve("go.mod"))
+                || workspace.sourceFiles(".go").isEmpty()) {
+            return;
+        }
+        try {
+            workspace.writeText("go.mod", "module jade.local/workspace\n\ngo 1.22\n");
+        } catch (RuntimeException e) {
+            // The build still has the GO111MODULE=off fallback.
+        }
+    }
+
+    private static String goExecutable() {
+        String configured = System.getenv("GO");
+        return configured == null || configured.isBlank() ? "go" : configured.strip();
     }
 
     private static Path javaTool(String name) {

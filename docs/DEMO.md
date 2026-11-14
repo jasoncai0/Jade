@@ -12,7 +12,7 @@ mvn -version
 ./run.sh --check
 ```
 
-Expected: `javac 21+`, Maven, Python 3, Node.js, 12 tools, 5 skills, writable workspace. The API
+Expected: `javac 21+`, Maven, Python 3, Node.js, Go, 12 tools, 6 skills, writable workspace. The API
 key line may say `MISSING`; that is expected until step 1.
 
 ## 1. Configure the key
@@ -47,7 +47,7 @@ Open <http://127.0.0.1:8080>. The top-right key pill should say `key ready`.
 The empty state shows:
 
 - 12 built-in tools
-- 5 discovered skills
+- 6 discovered skills
 - 10 phases per turn
 - 1 isolated workspace per run
 
@@ -59,7 +59,7 @@ surfaces. The Skills dialog lists the actual files discovered from `skills/`.
 Click the `Python CLI` example, or paste:
 
 ```
-Create a Python CLI at main.py that prints the first 15 prime numbers, one
+Create a Go CLI at main.go that prints the first 15 prime numbers, one
 per line. Syntax-check it with compile_code and run it to prove the output is
 correct.
 ```
@@ -70,7 +70,7 @@ Press `Start agent`. Watch:
 2. The phase rail lights through Intake → Checkpoint for each model turn.
 3. The tool card shows `write_file` arguments and the real write result.
 4. A second tool card shows `compile_code` / `run_code` output.
-5. The verification panel turns green with the exact `python3 -m py_compile`
+5. The verification panel turns green with the exact `python3 -m py_compile` or `go build`
    command (or `node --check` / `javac` for the other examples).
 6. The run ends `SUCCEEDED`; the workspace panel lists `main.py`.
 7. Stop the process, run `./run.sh` again, and reload the page. The left rail
@@ -177,9 +177,10 @@ Do not commit `.env`; it is ignored. The jar is at `target/coding-agent.jar`.
 
 - The ten phases are emitted as real events, not labels painted by the UI.
 - Tool calls are executed by the server and the results are fed back verbatim.
-- `javac`, `python3`, and `node` are real subprocesses; the verification card
-  contains the exact command and output for the detected language.
+- `javac`, `python3`, `node`, and `go` are real subprocesses; the verification
+  card contains the exact command and output for the detected language.
 - Skills are discovered from disk and selected by a deterministic score.
 - External tools use the standard `ServiceLoader` SPI.
-- This is a local demo; the HTTP server is unauthenticated and the shell guard
-  is not a sandbox. Say that explicitly.
+- This is a local demo; the HTTP server is unauthenticated. On macOS commands
+  run in a sandbox-exec write jail with network denied, but reads and the
+  kernel are shared with the host. It is not a container or VM.

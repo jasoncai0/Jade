@@ -2,7 +2,7 @@
 
 Jade is a small, runnable coding agent written in Java. It calls the DeepSeek
 chat-completions API, runs locally, and works on real files. A run can create a
-Java, Python, or JavaScript project, compile or syntax-check it with the real
+Java, Python, JavaScript, or Go project, compile or syntax-check it with the real
 toolchain, execute it, read the real stdout, repair failures, and preserve the
 transcript.
 
@@ -16,6 +16,7 @@ so startup is one command.
 - Maven 3.9+
 - Python 3 (`python3` on PATH) for Python workspaces
 - Node.js 18+ (`node` on PATH) for JavaScript workspaces
+- Go 1.22+ (`go` on PATH) for Go workspaces
 - A DeepSeek API key for real model calls
 
 The project was developed and tested with JDK 23.0.2 and Maven 3.9.9.
@@ -46,7 +47,7 @@ or written to logs.
 ## Headless use
 
 ```bash
-./run.sh --task "Create a Python CLI that prints the first 15 primes, compile it, and run it"
+./run.sh --task "Create a Go CLI at main.go that sorts a slice and prints it, then build and run it"
 ./run.sh --task-file task.txt
 ./run.sh --task "..." --workspace prime-demo
 ./run.sh --task "..." --max-steps 6
@@ -157,20 +158,24 @@ post-write `javac` verification or runtime tests.
 
 ### Languages
 
-Jade supports Java, Python, and JavaScript workspaces. The primary language is
-detected from the source files (most files; ties prefer Java, then Python, then
-JavaScript), and one run targets one primary language:
+Jade supports Java, Python, JavaScript, and Go workspaces. The primary language
+is detected from the source files (most files; ties prefer Java, then Python,
+then JavaScript, then Go), and one run targets one primary language:
 
 | Language | Syntax/build check | Default entry | Generic tools |
 |----------|--------------------|---------------|---------------|
 | Java | `javac` or Maven | `Main` class | `compile_code`, `run_code` |
 | Python | `python3 -m py_compile` | `main.py` | `compile_code`, `run_code` |
 | JavaScript | `node --check` per file | `main.js` | `compile_code`, `run_code` |
+| Go | `go build ./...` | `go run .` | `compile_code`, `run_code` |
 
 `compile_java` and `run_java` remain as Java-only aliases. `run_code` can also
 take an explicit `language` and `entry`, which is useful when a workspace has
-several source files. Python and Node are discovered from `PATH`; override them
-with the `PYTHON` and `NODE` environment variables if needed.
+several source files. Python, Node, and Go are discovered from `PATH`;
+override them with the `PYTHON`, `NODE`, and `GO` environment variables if
+needed. When a Go workspace has no `go.mod`, Jade creates a minimal module
+(`module jade.local/workspace`, `go 1.22`) before build/run, and also uses
+`GO111MODULE=off` as a fallback.
 
 ### Tools
 
@@ -184,7 +189,7 @@ Twelve built-in tools are registered at startup:
 | `edit_file` | Replace one exact fragment; fails on ambiguity |
 | `search_text` | Literal or regex search with line numbers |
 | `run_command` | Run a shell command with timeout and output capture |
-| `compile_code` | Compile or syntax-check Java, Python, or JavaScript |
+| `compile_code` | Compile or syntax-check Java, Python, JavaScript, or Go |
 | `run_code` | Compile if needed, then run the language entry point |
 | `compile_java` | Java-only alias for the javac/Maven verifier |
 | `run_java` | Java-only alias for running a main class |
@@ -199,13 +204,14 @@ Twelve built-in tools are registered at startup:
 Skills are markdown playbooks with YAML frontmatter. Jade discovers every
 `SKILL.md` under `skills/` (depth 3), puts a compact catalog in the system
 prompt, preloads the two best matches for the task, and exposes `load_skill` for
-on-demand loading. Five playbooks ship with the demo:
+on-demand loading. Six playbooks ship with the demo:
 
 - `skills/java-cli/SKILL.md` — build, compile, and execute a Java CLI
 - `skills/java-tdd/SKILL.md` — failing check first, then implementation
 - `skills/java-debug/SKILL.md` — compiler/runtime debugging discipline
 - `skills/python-cli/SKILL.md` — py_compile and execute a Python CLI
 - `skills/javascript-cli/SKILL.md` — node --check and execute a JavaScript CLI
+- `skills/go-cli/SKILL.md` — go build, go test, and go run a Go CLI
 
 Minimal skill:
 
@@ -372,6 +378,8 @@ Environment variables take precedence over `.env`:
 | `AGENT_CONTEXT_CHAR_BUDGET` | `120000` | compaction budget |
 | `AGENT_COMMAND_TIMEOUT_SECONDS` | `120` | default command timeout |
 | `AGENT_AUTO_VERIFY` | `true` | compile gate before final answer |
+| `AGENT_SANDBOX` | `auto` | `auto`, `off`, or `required`; macOS write jail |
+| `AGENT_SANDBOX_NETWORK` | `false` | allow network inside the sandbox |
 | `AGENT_HOST` | `127.0.0.1` | HTTP bind address |
 | `AGENT_PORT` | `8080` | HTTP port, `0` chooses a free port |
 | `AGENT_SKILLS_DIR` | `skills` | skill root |
@@ -383,7 +391,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 30 tests:
+The suite has 32 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -392,9 +400,11 @@ The suite has 30 tests:
 - DeepSeek request shape, JSON mode, strict tools, beta routing, and 401 behavior
   against a local mock HTTP server
 - language detection and aliases; real Python `py_compile`, JavaScript
-  `node --check`, Java `javac`, and execution through the generic tools
+  `node --check`, Java `javac`, Go `go build`, and execution through the
+  generic tools
 - the full agent loop with a scripted model: real `javac`, `run_java`, a Python
-  `run_code` path, and a compile-failure repair cycle
+  `run_code` path, Go build/run, and a compile-failure repair cycle
+- command sandbox write denial and SDK-directory exclusion
 - HTTP API and SSE replay against a real local server and a fake model
 - restart retention: a finished run is reloaded with its events, transcript, and files;
   an interrupted run is restored as `FAILED`
@@ -407,10 +417,13 @@ The suite has 30 tests:
   including symlink resolution.
 - File reads are capped at 512 KiB, writes at 1 MiB, command output at 200,000
   characters per stream, and tool output at 30,000 characters in the prompt.
-- Shell commands run with a sanitized environment and a small destructive-command
+- On macOS, commands run through `sandbox-exec` with writes confined to the run
+  workspace and a private temp directory; network is denied by default. Set
+  `AGENT_SANDBOX=required` to refuse startup when the jail is unavailable, or
+  `off` to disable it. Reads, process state, and the kernel are shared with the
+  host; this is a write/network jail, not a container or VM.
+- The shell still has a sanitized environment and a small destructive-command
   blocklist (`sudo`, `mkfs`, `dd` to block devices, fork bombs, `rm -rf /`).
-  This is a guardrail, not an OS sandbox. Treat the agent as code you chose to
-  run on your machine.
 - API keys are redacted from structured logs and omitted from `/api/config`.
 - The HTTP server is unauthenticated; keep it on localhost.
 
@@ -422,21 +435,21 @@ src/main/java/io/github/jasoncai0/agent/
   agent/                          ten-phase loop, state, events, artifacts, verifier
   cli/                            argument parsing and headless console
   config/                          env/.env, limits, logging
-  language/                       Java/Python/JavaScript detection and entry points
+  language/                       Java/Python/JavaScript/Go detection and entry points
   llm/                            DeepSeek client and wire records
   skill/                          SKILL.md discovery and ranking
   tool/                           registry, SPI, schemas, built-in tools
   web/                            JDK HTTP server, REST, SSE, static assets
 src/main/resources/web/           console UI (no CDN)
-skills/                           five skill playbooks
+skills/                           six skill playbooks
 docs/                             architecture and demo script
 ```
 
 ## Limitations
 
 - No authentication or multi-user tenancy; this is a local demo.
-- No OS-level process isolation. The command guard reduces accidents, not
-  hostile code.
+- No container or VM isolation. The macOS sandbox is a write/network jail;
+  reads and process state remain shared with the host.
 - No debugger integration (`jdb`, `pdb`, Node inspector). Debugging means
   reading compiler/runtime output, reproducing the failure, and repairing the
   source.

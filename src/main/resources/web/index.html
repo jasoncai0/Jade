@@ -14,7 +14,7 @@
     <span class="brand-mark">J<span class="brand-dot"></span></span>
     <span class="brand-copy">
       <strong>JADE</strong>
-      <small>Java · Python · JavaScript</small>
+      <small>Java · Python · JavaScript · Go</small>
     </span>
   </a>
 
@@ -66,6 +66,10 @@
         <span class="example-index">03</span>
         <span><strong>Java assertions</strong><small>javac + real exit code</small></span>
       </button>
+      <button class="example" type="button" data-task="Create a Go program at main.go that quicksorts a small integer slice and prints the sorted result. Build it with go build and run it with go run.">
+        <span class="example-index">04</span>
+        <span><strong>Go quicksort</strong><small>go build + go run</small></span>
+      </button>
     </section>
 
     <section class="runs-block">
@@ -96,7 +100,7 @@
       <h2>Plan. Edit. Compile. Run.</h2>
       <p class="empty-lede">
         A ten-phase coding loop with real tools, real files, and a verification gate.
-        Nothing is reported as working until <code>javac</code>, <code>python3</code>, or <code>node</code> says so.
+        Nothing is reported as working until <code>javac</code>, <code>python3</code>, <code>node</code>, or <code>go</code> says so.
       </p>
       <div class="loop-strip" aria-label="Ten-phase loop">
         <span>Intake</span><i></i><span>Context</span><i></i><span>Skills</span><i></i><span>Plan</span><i></i>
@@ -105,7 +109,7 @@
       </div>
       <div class="empty-facts">
         <div><strong id="emptyTools">12</strong><span>built-in tools</span></div>
-        <div><strong id="emptySkills">5</strong><span>discovered skills</span></div>
+        <div><strong id="emptySkills">6</strong><span>discovered skills</span></div>
         <div><strong>10</strong><span>phases per turn</span></div>
         <div><strong>1</strong><span>isolated workspace</span></div>
       </div>
@@ -207,10 +211,10 @@
 
     <section class="card runtime-card">
       <div class="eyebrow"><span class="eyebrow-line"></span>Runtime</div>
-      <div class="runtime-row"><span>Languages</span><span>Java · Python · JS</span></div>
+      <div class="runtime-row"><span>Languages</span><span>Java · Python · JS · Go</span></div>
       <div class="runtime-row"><span>Discovery</span><span>ServiceLoader</span></div>
       <div class="runtime-row"><span>Skills</span><span>SKILL.md</span></div>
-      <div class="runtime-row"><span>Isolation</span><span>per-run dir</span></div>
+      <div class="runtime-row"><span>Isolation</span><span>per-run dir + OS jail</span></div>
       <div class="runtime-row"><span>Transport</span><span>SSE</span></div>
     </section>
   </aside>

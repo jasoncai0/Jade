@@ -20,7 +20,7 @@ AgentLoop ──────────────► DeepSeekClient ──►
    ├── ToolRegistry ──► built-in tools + ServiceLoader providers
    ├── SkillRegistry ─► skills/**/SKILL.md
    ├── ContextCompactor
-   ├── Verifier ──────► javac/Maven, py_compile, node --check, runtimes
+   ├── Verifier ──────► javac/Maven, py_compile, node --check, go build, runtimes
    └── Workspace ─────► per-run directory under agent-workspaces/
 ```
 
@@ -95,7 +95,7 @@ message explaining the limit, so the assistant/tool pairing stays valid.
 
 `Verifier.verify()` is the only code path that decides whether a changed
 workspace is buildable. It detects the primary language from the source files
-(most files, tie order Java > Python > JavaScript):
+(most files, tie order Java > Python > JavaScript > Go):
 
 - If no supported source exists, return a skip result.
 - Java with `pom.xml`: run Maven compile (prefer `./mvnw`, fall back to `mvn`).
@@ -103,8 +103,11 @@ workspace is buildable. It detects the primary language from the source files
   files.
 - Python: run `python3 -m py_compile` over all `.py` files.
 - JavaScript: run `node --check` for each `.js` file.
-- `run()` executes `java <mainClass>` (Java) or `python3/node <entry file>`.
-  `runMain()` remains the Java-specific helper used by the `run_java` alias.
+- Go: ensure a minimal `go.mod` exists for module-less demos, then run
+  `go build ./...`; `GO111MODULE=off` remains a fallback.
+- `run()` executes `java <mainClass>` (Java), `python3/node <entry file>`
+  (Python/JavaScript), or `go run .` / `go run <entry>` (Go). `runMain()`
+  remains the Java-specific helper used by the `run_java` alias.
 
 The gate runs only when the model stops calling tools, and only if the workspace
 is dirty or has been touched. A failed build is converted into a user message:
@@ -291,8 +294,15 @@ phase, tool, and model-call boundaries.
 - Writes are atomic and limited to 1 MiB.
 - `CommandRunner` captures stdout/stderr separately, caps each at 200,000
   characters, and kills on timeout.
-- The shell guard blocks a short list of destructive commands. It is not a
-  container or OS sandbox. Documentation and the UI call this out.
+- On macOS, `CommandSandbox` wraps shell commands in `sandbox-exec` with a
+  write jail: writes are limited to the run workspace, `.agent-build/tmp`, and
+  `/dev/null`; network is denied unless `AGENT_SANDBOX_NETWORK=true`.
+  `AGENT_SANDBOX=required` fails closed if the jail is unavailable.
+- Reads, process state, and the kernel remain shared with the host. This is not
+  a container or VM; documentation and the UI call this out.
+- `.toolchain`, `.sdk`, `.sdkman`, `.nvm`, `.rustup`, `.cargo`, `vendor`, and
+  `third_party` are excluded from source detection, so an SDK unpacked into the
+  workspace cannot be mistaken for project source.
 - The web server is unauthenticated and localhost-bound by default.
 
 ## 12. Why these choices
@@ -316,6 +326,7 @@ The suite uses no real API key:
 - a local `HttpServer` fake for DeepSeek request/response shape
 - a scripted `LlmClient` for the full loop, including a real `javac` failure
   and repair
+- sandbox write denial and SDK-directory exclusion
 - a real `WebServer` + `AgentService` + fake model for REST/SSE integration
 
 `mvn test` is the authoritative check. `mvn package` adds the shaded jar.
