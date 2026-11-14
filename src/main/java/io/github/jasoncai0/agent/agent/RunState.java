@@ -12,7 +12,7 @@ public final class RunState {
     private final String task;
     private final String workspace;
     private final int maxSteps;
-    private final long startedAt = System.currentTimeMillis();
+    private final long startedAt;
     private final List<PlanItem> plan = new CopyOnWriteArrayList<>();
     private final List<String> files = new CopyOnWriteArrayList<>();
     private volatile String status = RunStatus.QUEUED.name();
@@ -27,11 +27,50 @@ public final class RunState {
     private volatile String transcriptPath;
 
     public RunState(String id, String task, String workspace, int maxSteps) {
+        this(id, task, workspace, maxSteps, System.currentTimeMillis());
+    }
+
+    RunState(String id, String task, String workspace, int maxSteps, long startedAt) {
         this.id = id;
         this.task = task;
         this.workspace = workspace;
         this.maxSteps = maxSteps;
+        this.startedAt = startedAt > 0 ? startedAt : System.currentTimeMillis();
         this.plan.addAll(defaultPlan());
+    }
+
+    /**
+     * Rebuilds mutable run state from a persisted snapshot. A snapshot that was
+     * still RUNNING/QUEUED is surfaced as FAILED because its executor died with
+     * the previous process.
+     */
+    static RunState restore(RunSnapshot snapshot) {
+        RunState state = new RunState(snapshot.id(), snapshot.task(), snapshot.workspace(),
+                snapshot.maxSteps(), snapshot.startedAt());
+        state.plan.clear();
+        if (snapshot.plan() != null) {
+            state.plan.addAll(snapshot.plan());
+        }
+        state.files.clear();
+        if (snapshot.files() != null) {
+            state.files.addAll(snapshot.files());
+        }
+        state.status = snapshot.status();
+        state.phase = snapshot.phase() == null ? AgentPhase.CHECKPOINT.id() : snapshot.phase();
+        state.phaseLabel = snapshot.phaseLabel() == null ? AgentPhase.CHECKPOINT.label() : snapshot.phaseLabel();
+        state.step = snapshot.step();
+        state.usage = snapshot.usage() == null ? Usage.ZERO : snapshot.usage();
+        state.finalAnswer = snapshot.finalAnswer();
+        state.error = snapshot.error();
+        state.verification = snapshot.verification();
+        state.finishedAt = snapshot.finishedAt();
+        state.transcriptPath = snapshot.transcriptPath();
+        if (!snapshot.terminal()) {
+            state.status = RunStatus.FAILED.name();
+            state.error = "Run was interrupted by a server restart";
+            state.finishedAt = System.currentTimeMillis();
+        }
+        return state;
     }
 
     public String id() {

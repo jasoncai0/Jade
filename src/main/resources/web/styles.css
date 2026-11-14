@@ -510,6 +510,14 @@ textarea:focus {
 .mini-status.running { color: var(--amber); }
 .mini-status.max_steps { color: var(--amber); }
 
+.retention-note {
+  margin: 9px 0 0 10px;
+  color: #3f4c44;
+  font-family: var(--mono);
+  font-size: 7.5px;
+  letter-spacing: 0.03em;
+}
+
 .rail-footer {
   margin-top: auto;
   padding-top: 15px;

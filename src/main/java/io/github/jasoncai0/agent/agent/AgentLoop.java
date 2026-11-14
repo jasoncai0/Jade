@@ -221,6 +221,14 @@ public final class AgentLoop {
             RunSnapshot snapshot = state.snapshot();
             log.emit("run.finished", eventMap("snapshot", snapshot));
             log.close();
+            try {
+                // Persist once more so a restarted process can replay the final
+                // run.finished event, not just the earlier checkpoint.
+                RunArtifacts.persist(workspace, snapshot, messages, log);
+            } catch (RuntimeException e) {
+                Log.warn("agent.artifacts.final_failed", Map.of(
+                        "runId", state.id(), "error", String.valueOf(e.getMessage())));
+            }
             Log.info("agent.run.finished", Map.of(
                     "runId", state.id(),
                     "status", snapshot.status(),

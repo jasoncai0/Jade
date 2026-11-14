@@ -32,6 +32,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.stream.Stream;
 
 /**
  * Owns run isolation, execution, cancellation, discovery metadata, and snapshots.
@@ -40,6 +41,7 @@ import java.util.concurrent.TimeoutException;
 public final class AgentService implements AutoCloseable {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private static final int MAX_TASK_CHARS = 20_000;
+    private static final int MAX_RESTORED_SESSIONS = 200;
 
     private final AppConfig config;
     private final LlmClient llm;
@@ -66,6 +68,7 @@ public final class AgentService implements AutoCloseable {
         } catch (IOException e) {
             throw new UncheckedIOException("Cannot create workspaces directory " + config.workspacesDir(), e);
         }
+        restoreRuns();
         Log.info("agent.service.ready", Map.of(
                 "model", config.llm().model(),
                 "skills", skills.all().size(),
@@ -238,6 +241,65 @@ public final class AgentService implements AutoCloseable {
 
     public AppConfig config() {
         return config;
+    }
+
+    /**
+     * Rehydrates recent terminal runs from {@code agent-workspaces/<name>/.agent/}.
+     * Sessions are read-only history: their executor died with the previous
+     * process, so they are not inserted into the active-workspace set.
+     */
+    private void restoreRuns() {
+        List<Path> candidates = new ArrayList<>();
+        try (Stream<Path> entries = Files.list(config.workspacesDir())) {
+            entries.filter(Files::isDirectory)
+                    .filter(dir -> Files.isRegularFile(dir.resolve(".agent/transcript.json")))
+                    .forEach(candidates::add);
+        } catch (IOException e) {
+            Log.warn("agent.sessions.scan_failed", Map.of("error", String.valueOf(e.getMessage())));
+            return;
+        }
+        candidates.sort(Comparator.comparingLong(this::sessionModified).reversed());
+
+        int restored = 0;
+        for (Path directory : candidates) {
+            if (restored >= MAX_RESTORED_SESSIONS) {
+                break;
+            }
+            try {
+                Workspace workspace = Workspace.open(directory);
+                RunArtifacts.StoredRun stored = RunArtifacts.load(workspace.root()).orElse(null);
+                if (stored == null) {
+                    continue;
+                }
+                RunSnapshot snapshot = stored.snapshot();
+                if (runs.containsKey(snapshot.id())) {
+                    Log.warn("agent.sessions.duplicate", Map.of("runId", snapshot.id(),
+                            "workspace", workspace.root().getFileName().toString()));
+                    continue;
+                }
+                RunState state = RunState.restore(snapshot);
+                RunEventLog events = RunEventLog.restore(stored.events());
+                AgentRun run = new AgentRun(snapshot.id(), workspace, state, events,
+                        new RunControl(), CompletableFuture.completedFuture(state.snapshot()));
+                runs.put(snapshot.id(), run);
+                restored++;
+            } catch (RuntimeException e) {
+                Log.warn("agent.sessions.restore_failed", Map.of(
+                        "workspace", directory.getFileName().toString(),
+                        "error", String.valueOf(e.getMessage())));
+            }
+        }
+        Log.info("agent.sessions.restored", Map.of(
+                "restored", restored,
+                "candidates", candidates.size()));
+    }
+
+    private long sessionModified(Path directory) {
+        try {
+            return Files.getLastModifiedTime(directory.resolve(".agent/transcript.json")).toMillis();
+        } catch (IOException e) {
+            return 0L;
+        }
     }
 
     private String uniqueName() {

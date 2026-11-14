@@ -87,9 +87,31 @@ choose to finish in fewer turns; it cannot exceed ten model turns by default.
 This is intentional: ten phases describe one turn, while ten turns bound the
 whole task.
 
+### Session history
+
+Runs are retained on disk and come back after a server restart. The web console
+lists up to the 200 most recent saved sessions, and an old session can still be
+selected to inspect its plan, trace, verification output, files, and final
+answer. The durable files are:
+
+```
+agent-workspaces/<name>/
+  src/...                 artifact files
+  .agent/transcript.json  run snapshot + model conversation
+  .agent/events.jsonl     full replayable event stream
+  .agent/final.md         final answer, when present
+```
+
+`AgentService` restores terminal sessions at startup and rehydrates each event
+log with its original sequence numbers, so SSE replay works after a restart.
+A session that was still `RUNNING` when the previous process died comes back as
+`FAILED` with an interruption message instead of pretending to be live. Restored
+sessions are read-only history; starting a new task creates a new isolated
+workspace. Delete a workspace directory to remove that session permanently.
+
 ### LLM request trace
 
-Every model call emits an `llm.request` event with the exact JSON body sent to
+Every model call emits a `llm.request` event with the exact JSON body sent to
 DeepSeek: model, messages, tool schemas, temperature, and token limits. The web
 console shows it as a collapsed **request body** card; click to expand. Bodies
 are also persisted in the run's `.agent/events.jsonl`.
@@ -334,7 +356,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 19 tests:
+The suite has 21 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -345,6 +367,8 @@ The suite has 19 tests:
 - the full agent loop with a scripted model: real `javac`, `run_java`, and a
   compile-failure repair cycle
 - HTTP API and SSE replay against a real local server and a fake model
+- restart retention: a finished run is reloaded with its events, transcript, and files;
+  an interrupted run is restored as `FAILED`
 
 `mvn package` builds `target/coding-agent.jar`.
 
@@ -385,7 +409,8 @@ docs/                             architecture and demo script
   hostile code.
 - No debugger integration (`jdb`). Debugging means reading compiler/runtime
   output, reproducing the failure, and repairing the source.
-- No persistent database; run metadata lives in memory for the process
-  lifetime, and transcripts/workspaces are on disk.
+- No database or multi-session chat: completed runs are retained as read-only
+  history; a follow-up starts a new isolated session rather than appending to
+  the old transcript.
 - The live DeepSeek call is not part of the automated suite because it needs a
   user key; the HTTP layer is tested against a local fake endpoint instead.

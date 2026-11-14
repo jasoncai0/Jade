@@ -226,7 +226,7 @@ function renderRunList() {
   const runs = [...state.runs].sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
   $('runCount').textContent = String(runs.length);
   if (runs.length === 0) {
-    list.appendChild(el('p', 'empty-note', 'No runs yet. Start one above.'));
+    list.appendChild(el('p', 'empty-note', 'No saved sessions yet. Start one above; it will survive a restart.'));
     return;
   }
   for (const run of runs) {

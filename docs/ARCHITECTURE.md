@@ -24,9 +24,12 @@ AgentLoop ──────────────► DeepSeekClient ──►
    └── Workspace ─────► per-run directory under agent-workspaces/
 ```
 
-There is no database. Run snapshots live in memory for the process lifetime.
-The durable artifacts are the run directory, `.agent/transcript.json`,
-`.agent/events.jsonl`, and `.agent/final.md`.
+There is no database. Live run snapshots live in memory, while completed runs
+are durable: the run directory, `.agent/transcript.json`,
+`.agent/events.jsonl`, and `.agent/final.md`. `AgentService` scans the workspace
+root at startup, rehydrates up to 200 recent terminal runs, and reopens their
+event logs in a closed state so the web console can replay them. A snapshot that
+was still `RUNNING` at startup becomes `FAILED` with an interruption message.
 
 ## 2. Package map
 
@@ -229,6 +232,10 @@ contains messages, tools, model, temperature, and token limits. Authorization
 headers are not part of the body and are never emitted. The web trace renders
 this event as a collapsed `<details>` element so the conversation remains
 readable until the user expands it.
+
+Terminal sessions are replayed from `.agent/events.jsonl`. If an older run has
+no `run.finished` event, loading synthesizes one from `transcript.json` so the
+restored timeline still ends with a final card.
 
 `ChatRequest` optionally carries `ResponseFormat` (`text` or `json_object`) and
 each `ToolSpec` carries a `strict` flag. `DeepSeekClient` serializes

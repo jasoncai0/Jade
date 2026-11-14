@@ -71,6 +71,9 @@ Press `Start agent`. Watch:
 4. A second tool card shows `compile_java` / `run_java` output.
 5. The verification panel turns green with the exact `javac` command.
 6. The run ends `SUCCEEDED`; the workspace panel lists `src/Main.java`.
+7. Stop the process, run `./run.sh` again, and reload the page. The left rail
+   still lists the session; select it and the plan, trace, files, and final
+   answer replay from `.agent/`.
 
 Each model call also adds a collapsed `LLM REQUEST` card to the trace. Click
 `request body` to inspect the exact JSON sent to DeepSeek: model, messages,
