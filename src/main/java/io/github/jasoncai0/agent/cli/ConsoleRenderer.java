@@ -51,6 +51,10 @@ public final class ConsoleRenderer {
                     out.println(indent(truncate(output, 4000), "  "));
                 }
             }
+            case "permission.request" -> out.printf("%n[permission] %s: %s%n  %s%n",
+                    text(data.get("kind")), text(data.get("summary")), text(data.get("detail")));
+            case "permission.resolved" -> out.printf("[permission] %s (%s)%n",
+                    text(data.get("decision")), text(data.get("scope")));
             case "compaction" -> out.printf("[compact] %s -> %s chars, removed %s messages%n",
                     text(data.get("beforeChars")), text(data.get("afterChars")), text(data.get("removed")));
             case "run.failed" -> out.printf("%n[run failed] %s%n", text(data.get("error")));

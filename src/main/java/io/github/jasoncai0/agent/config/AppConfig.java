@@ -1,5 +1,7 @@
 package io.github.jasoncai0.agent.config;
 
+import io.github.jasoncai0.agent.permission.PermissionMode;
+
 import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Map;
@@ -39,7 +41,8 @@ public record AppConfig(
                         AgentSettings.HARD_MAX_TOOL_CALLS_PER_STEP),
                 integer(get, "AGENT_CONTEXT_CHAR_BUDGET", 120_000, 20_000, 1_000_000),
                 integer(get, "AGENT_COMMAND_TIMEOUT_SECONDS", 120, 1, 600),
-                bool(get, "AGENT_AUTO_VERIFY", true)
+                bool(get, "AGENT_AUTO_VERIFY", true),
+                PermissionMode.fromId(value(get, "AGENT_PERMISSION_MODE", "balanced"))
         );
         ServerSettings server = new ServerSettings(
                 value(get, "AGENT_HOST", "127.0.0.1"),

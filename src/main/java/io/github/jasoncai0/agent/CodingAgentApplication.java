@@ -9,6 +9,8 @@ import io.github.jasoncai0.agent.cli.ConsoleRenderer;
 import io.github.jasoncai0.agent.config.AgentSettings;
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
+import io.github.jasoncai0.agent.permission.PermissionDecision;
+import io.github.jasoncai0.agent.permission.PermissionScope;
 import io.github.jasoncai0.agent.config.ServerSettings;
 import io.github.jasoncai0.agent.language.Language;
 import io.github.jasoncai0.agent.llm.ChatMessage;
@@ -28,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
 public final class CodingAgentApplication {
@@ -240,6 +243,9 @@ public final class CodingAgentApplication {
                 }
                 for (AgentEvent event : events) {
                     console.render(event);
+                    if (event.type().equals("permission.request")) {
+                        resolvePermission(service, run, event);
+                    }
                     last = event.seq();
                 }
             }
@@ -263,6 +269,32 @@ public final class CodingAgentApplication {
             }
             service.close();
         }
+    }
+
+    private void resolvePermission(AgentService service, AgentRun run, AgentEvent event) {
+        Map<String, Object> data = event.data();
+        String requestId = String.valueOf(data.getOrDefault("id", ""));
+        String summary = String.valueOf(data.getOrDefault("summary", "Permission required"));
+        String detail = String.valueOf(data.getOrDefault("detail", ""));
+        System.out.println();
+        System.out.println("[permission] " + summary);
+        if (!detail.isBlank()) {
+            System.out.println("  " + detail);
+        }
+        System.out.println("  [a]llow once  [s]ession  [d]eny");
+        var console = System.console();
+        if (console == null) {
+            service.resolvePermission(run.id(), requestId, PermissionDecision.DENY,
+                    PermissionScope.ONCE, "non-interactive stdin");
+            System.out.println("  denied: no interactive terminal");
+            return;
+        }
+        String answer = console.readLine("permission> ");
+        String normalized = answer == null ? "d" : answer.strip().toLowerCase();
+        PermissionDecision decision = normalized.startsWith("a") || normalized.startsWith("s")
+                ? PermissionDecision.ALLOW : PermissionDecision.DENY;
+        PermissionScope scope = normalized.startsWith("s") ? PermissionScope.SESSION : PermissionScope.ONCE;
+        service.resolvePermission(run.id(), requestId, decision, scope, "cli");
     }
 
     private static String readTaskFile(String file) {
@@ -293,9 +325,14 @@ public final class CodingAgentApplication {
 
     private static AppConfig applyOverrides(AppConfig config, CliOptions options) {
         AgentSettings agent = config.agent();
-        if (options.maxSteps() != null) {
-            agent = new AgentSettings(options.maxSteps(), agent.maxToolCallsPerStep(),
-                    agent.contextCharBudget(), agent.commandTimeoutSeconds(), agent.autoVerify());
+        if (options.maxSteps() != null || options.permissionMode() != null) {
+            agent = new AgentSettings(
+                    options.maxSteps() == null ? agent.maxSteps() : options.maxSteps(),
+                    agent.maxToolCallsPerStep(),
+                    agent.contextCharBudget(),
+                    agent.commandTimeoutSeconds(),
+                    agent.autoVerify(),
+                    options.permissionMode() == null ? agent.permissionMode() : options.permissionMode());
         }
         ServerSettings server = config.server();
         if (options.port() != null || options.host() != null) {

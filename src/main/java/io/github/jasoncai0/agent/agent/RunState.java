@@ -1,6 +1,7 @@
 package io.github.jasoncai0.agent.agent;
 
 import io.github.jasoncai0.agent.llm.Usage;
+import io.github.jasoncai0.agent.permission.PermissionRequest;
 import io.github.jasoncai0.agent.workspace.Workspace;
 
 import java.util.ArrayList;
@@ -25,6 +26,7 @@ public final class RunState {
     private volatile String verification;
     private volatile long finishedAt;
     private volatile String transcriptPath;
+    private volatile PermissionRequest pendingPermission;
 
     public RunState(String id, String task, String workspace, int maxSteps) {
         this(id, task, workspace, maxSteps, System.currentTimeMillis());
@@ -148,6 +150,23 @@ public final class RunState {
         finishedAt = 0;
         plan.clear();
         plan.addAll(defaultPlan());
+        pendingPermission = null;
+    }
+
+    public synchronized void awaitPermission(PermissionRequest request) {
+        pendingPermission = request;
+        status = RunStatus.WAITING_APPROVAL.name();
+    }
+
+    public synchronized void resolvePermission() {
+        pendingPermission = null;
+        if (RunStatus.WAITING_APPROVAL.name().equals(status)) {
+            status = RunStatus.RUNNING.name();
+        }
+    }
+
+    public PermissionRequest pendingPermission() {
+        return pendingPermission;
     }
 
     public synchronized void setPhase(AgentPhase next, int stepNumber) {

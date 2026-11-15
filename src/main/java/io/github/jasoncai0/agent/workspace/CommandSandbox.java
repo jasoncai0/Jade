@@ -93,6 +93,10 @@ public final class CommandSandbox {
      * variables that keep compiler caches and temp files inside the jail.
      */
     public void prepare(ProcessBuilder builder, Path writableRoot) {
+        prepare(builder, writableRoot, false);
+    }
+
+    public void prepare(ProcessBuilder builder, Path writableRoot, boolean allowNetwork) {
         Path root = writableRoot.toAbsolutePath().normalize();
         Path tmp = root.resolve(".agent-build/tmp");
         Path goCache = root.resolve(".agent-build/go-cache");
@@ -118,7 +122,7 @@ public final class CommandSandbox {
         env.put("JAVA_TOOL_OPTIONS", existingJavaOptions == null || existingJavaOptions.isBlank()
                 ? javaTmp : existingJavaOptions + " " + javaTmp);
         env.put("AGENT_SANDBOX_ACTIVE", active ? "1" : "0");
-        env.put("AGENT_SANDBOX_NETWORK", network ? "1" : "0");
+        env.put("AGENT_SANDBOX_NETWORK", (network || allowNetwork) ? "1" : "0");
     }
 
     /**
@@ -126,6 +130,10 @@ public final class CommandSandbox {
      * original argv for display and logging.
      */
     public List<String> wrap(List<String> argv, Path writableRoot) {
+        return wrap(argv, writableRoot, false);
+    }
+
+    public List<String> wrap(List<String> argv, Path writableRoot, boolean allowNetwork) {
         if (!active) {
             return argv;
         }
@@ -141,7 +149,7 @@ public final class CommandSandbox {
         String profile = UNIX_PROFILE.formatted(
                 escape(root.toString()),
                 escape(tmp.toString()),
-                network ? "(allow network*)" : "");
+                (network || allowNetwork) ? "(allow network*)" : "");
         List<String> wrapped = new ArrayList<>(argv.size() + 5);
         wrapped.add(executable.toString());
         wrapped.add("-p");

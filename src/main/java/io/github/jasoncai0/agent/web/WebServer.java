@@ -10,6 +10,10 @@ import io.github.jasoncai0.agent.agent.AgentEvent;
 import io.github.jasoncai0.agent.agent.AgentRun;
 import io.github.jasoncai0.agent.agent.AgentService;
 import io.github.jasoncai0.agent.agent.RunSnapshot;
+import io.github.jasoncai0.agent.permission.PermissionDecision;
+import io.github.jasoncai0.agent.permission.PermissionRequest;
+import io.github.jasoncai0.agent.permission.PermissionResult;
+import io.github.jasoncai0.agent.permission.PermissionScope;
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
 import io.github.jasoncai0.agent.config.ServerSettings;
@@ -172,6 +176,17 @@ public final class WebServer implements AutoCloseable {
             followUp(exchange, id);
             return;
         }
+        if (action.equals("permissions") && method.equals("GET")) {
+            PermissionRequest pending = agentService.pendingPermission(id);
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("pending", pending == null ? List.of() : List.of(pending.publicView()));
+            sendData(exchange, 200, data);
+            return;
+        }
+        if (action.equals("permissions") && method.equals("POST")) {
+            resolvePermission(exchange, id, segments.length > 2 ? segments[2] : null);
+            return;
+        }
         if (action.equals("files") && method.equals("GET")) {
             AgentRun run = agentService.require(id);
             List<Map<String, Object>> files = new ArrayList<>();
@@ -236,6 +251,40 @@ public final class WebServer implements AutoCloseable {
         data.put("run", snapshot);
         data.put("eventsUrl", "/api/runs/" + snapshot.id() + "/events");
         sendData(exchange, 202, data);
+    }
+
+    private void resolvePermission(HttpExchange exchange, String id, String requestId) throws IOException {
+        if (requestId == null || requestId.isBlank()) {
+            sendError(exchange, 400, "Permission request id is required");
+            return;
+        }
+        JsonNode body = readJson(exchange);
+        if (body == null || !body.isObject()) {
+            sendError(exchange, 400, "JSON body must be an object");
+            return;
+        }
+        String rawDecision = body.path("decision").asText("deny");
+        PermissionDecision decision;
+        try {
+            decision = switch (rawDecision.toLowerCase()) {
+                case "allow" -> PermissionDecision.ALLOW;
+                case "deny" -> PermissionDecision.DENY;
+                default -> throw new IllegalArgumentException("decision must be allow or deny");
+            };
+        } catch (IllegalArgumentException e) {
+            sendError(exchange, 400, e.getMessage());
+            return;
+        }
+        PermissionScope scope = PermissionScope.fromId(body.path("scope").asText("once"));
+        String reason = body.path("reason").asText("web");
+        PermissionResult result = agentService.resolvePermission(id, requestId, decision, scope, reason);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("requestId", requestId);
+        data.put("decision", decision.name());
+        data.put("scope", scope.id());
+        data.put("networkAllowed", result.networkAllowed());
+        data.put("run", agentService.require(id).snapshot());
+        sendData(exchange, 200, data);
     }
 
     private void streamEvents(HttpExchange exchange, String id) throws IOException {

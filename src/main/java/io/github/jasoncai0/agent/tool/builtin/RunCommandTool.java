@@ -48,7 +48,7 @@ public final class RunCommandTool implements Tool {
         context.markTouched();
         try {
             CommandRunner.CommandResult result = new CommandRunner()
-                    .runShell(command, cwd, timeout, context.workspace().root());
+                    .runShell(command, cwd, timeout, context.workspace().root(), context.networkAllowed());
             String output = "$ " + command + "\nexit=" + result.exitCode()
                     + "  time=" + result.durationMs() + "ms"
                     + (result.timedOut() ? "  (timed out)" : "") + "\n"

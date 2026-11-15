@@ -36,7 +36,7 @@ was still `RUNNING` at startup becomes `FAILED` with an interruption message.
 | Package | Responsibility |
 |---------|----------------|
 | `io.github.jasoncai0.agent` | entry point, mode dispatch, shutdown |
-| `agent` | loop, phases, run state, event log, compaction, verifier, artifacts |
+| `agent` | loop, phases, run state, event log, compaction, verifier, artifacts, permission broker |
 | `cli` | options and headless console renderer |
 | `config` | `.env`/environment loading, validated limits, JSON logging |
 | `llm` | DeepSeek client, request/response records, usage |
@@ -52,9 +52,9 @@ The phrase "ten step loop" is represented at two levels:
 1. **Ten phases per model turn.** Every turn emits `intake`, `context`,
    `skills`, `plan`, `model`, `tools`, `observe`, `verify`, `compact`, and
    `checkpoint` phase events, in that order.
-2. **Ten model turns per run.** `AgentSettings.maxSteps` defaults to 10 and is
-   hard-capped at 30 by validation. This is the outer bound; a run can finish
-   earlier.
+2. **A bounded number of model turns per user turn.** `AgentSettings.maxSteps`
+   defaults to 10 and is hard-capped at 30 by validation. This is the outer
+   bound; a run can finish earlier.
 
 The model only participates in `model` and `tools`. The framework owns the rest
 so that verification, compaction, and persistence cannot be skipped by a model
@@ -198,6 +198,28 @@ It drops oldest groups until the character budget is met. If a group is still
 too large, long content is truncated. It never leaves a tool result without its
 assistant call, because DeepSeek rejects orphaned tool messages.
 
+## 8. Permission gate
+
+Before a tool executes, `AgentLoop` calls `PermissionManager.authorize(tool, args)`.
+The manager evaluates `PermissionPolicy` against the session's grants:
+
+- read-only tools and safe commands return `ALLOW` immediately;
+- a first write, generated-code execution, dangerous command, or network call
+  returns `ASK` and blocks that tool call;
+- hard-denied commands return `DENY` without an approval path.
+
+An `ASK` registers a `PermissionRequest` with `PermissionBroker`, changes the run
+to `WAITING_APPROVAL`, emits `permission.request`, and waits up to 300 seconds.
+The web UI or CLI resolves it with `allow|deny` and scope `once|session`.
+`permission.resolved` is emitted, the decision is appended to
+`.agent/permissions.jsonl`, and the tool either executes or returns a tool error.
+A denial is fed back to the model as a tool result; the run is not failed. A
+timeout and cancellation are denials.
+
+Permission sessions are per run and in-memory: a restart loses session grants.
+The layer is authorization and audit, not a kernel sandbox; an approved command
+still runs with the user's host permissions.
+
 ## 8. Event model and SSE
 
 `RunEventLog` is append-only and sequence-numbered from 1. `RunEvent` carries
@@ -235,6 +257,8 @@ Key events:
 | `plan` / `workspace` | `plan` / `files` |
 | `verification` | `ok`, `skipped`, `summary`, `command`, `output`, `durationMs`, `step` |
 | `compaction` | `removed`, `beforeChars`, `afterChars` |
+| `permission.request` | `id`, `runId`, `tool`, `kind`, `risk`, `summary`, `detail`, `target`, `options`, `createdAt`, `expiresAt` |
+| `permission.resolved` | `id`, `decision`, `scope`, `reason` |
 | `run.finished` | final `snapshot` |
 
 Data values are never null; `AgentLoop.eventMap` filters nulls because

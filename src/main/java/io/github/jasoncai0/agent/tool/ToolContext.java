@@ -22,6 +22,7 @@ public final class ToolContext {
     private final AtomicBoolean touched = new AtomicBoolean();
     private final AtomicBoolean verified = new AtomicBoolean();
     private final Set<String> loadedSkills = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean networkAllowed = new AtomicBoolean();
 
     public ToolContext(Workspace workspace, AgentSettings settings, SkillRegistry skills,
                        RunState state, Verifier verifier) {
@@ -50,6 +51,14 @@ public final class ToolContext {
 
     public Verifier verifier() {
         return verifier;
+    }
+
+    public void setNetworkAllowed(boolean allowed) {
+        networkAllowed.set(allowed);
+    }
+
+    public boolean networkAllowed() {
+        return networkAllowed.get();
     }
 
     public void markDirty() {

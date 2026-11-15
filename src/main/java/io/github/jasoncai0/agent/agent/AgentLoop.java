@@ -11,6 +11,8 @@ import io.github.jasoncai0.agent.llm.ChatResult;
 import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.llm.LlmException;
 import io.github.jasoncai0.agent.llm.ToolCall;
+import io.github.jasoncai0.agent.permission.PermissionResult;
+import io.github.jasoncai0.agent.permission.PermissionSession;
 import io.github.jasoncai0.agent.skill.Skill;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.tool.ToolContext;
@@ -38,6 +40,8 @@ public final class AgentLoop {
     private final AgentSettings settings;
     private final int maxOutputTokens;
     private final Verifier verifier;
+    private final PermissionBroker permissionBroker;
+    private final PermissionSession permissionSession;
     private final ContextCompactor compactor = new ContextCompactor();
 
     public AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
@@ -47,12 +51,21 @@ public final class AgentLoop {
 
     AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
               AgentSettings settings, int maxOutputTokens, Verifier verifier) {
+        this(llm, tools, skills, settings, maxOutputTokens, verifier,
+                new PermissionBroker(), new PermissionSession());
+    }
+
+    AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
+              AgentSettings settings, int maxOutputTokens, Verifier verifier,
+              PermissionBroker permissionBroker, PermissionSession permissionSession) {
         this.llm = llm;
         this.tools = tools;
         this.skills = skills;
         this.settings = settings;
         this.maxOutputTokens = maxOutputTokens;
         this.verifier = verifier;
+        this.permissionBroker = permissionBroker == null ? new PermissionBroker() : permissionBroker;
+        this.permissionSession = permissionSession == null ? new PermissionSession() : permissionSession;
     }
 
     public RunSnapshot run(String task, Workspace workspace, RunState state,
@@ -102,6 +115,8 @@ public final class AgentLoop {
                                 boolean continuation) {
         ToolContext context = new ToolContext(workspace, settings, skills, state, verifier);
         context.refreshFiles();
+        PermissionManager permissions = new PermissionManager(settings.permissionMode(), permissionSession,
+                permissionBroker, state, log, control, workspace);
 
         try {
             boolean completed = false;
@@ -161,7 +176,7 @@ public final class AgentLoop {
                 int[] stats = {0, 0};
                 if (hasCalls) {
                     totalToolCalls += result.toolCalls().size();
-                    executeTools(result.toolCalls(), messages, context, state, log, control, stats);
+                    executeTools(result.toolCalls(), messages, context, state, log, control, stats, permissions);
                 }
 
                 phase(state, log, AgentPhase.OBSERVE, cycle,
@@ -271,7 +286,7 @@ public final class AgentLoop {
 
     private void executeTools(List<ToolCall> calls, List<ChatMessage> messages,
                               ToolContext context, RunState state, RunEventLog log,
-                              RunControl control, int[] stats) {
+                              RunControl control, int[] stats, PermissionManager permissions) {
         int limit = Math.min(calls.size(), settings.maxToolCallsPerStep());
         for (int i = 0; i < calls.size(); i++) {
             control.checkCancelled();
@@ -301,8 +316,23 @@ public final class AgentLoop {
                     "name", call.name(),
                     "arguments", truncate(call.arguments(), 5000)
             ));
+            PermissionResult permission = permissions.authorize(call.name(), args);
+            if (!permission.allowed()) {
+                String message = "Permission denied: " + permission.reason();
+                messages.add(ChatMessage.tool(call.id(), "ERROR " + call.name() + ": " + message));
+                log.emit("tool.end", eventMap("id", call.id(), "name", call.name(), "ok", false,
+                        "output", message, "durationMs", 0));
+                stats[1]++;
+                continue;
+            }
             long started = System.currentTimeMillis();
-            ToolResult result = tools.execute(call.name(), args, context);
+            ToolResult result;
+            context.setNetworkAllowed(permission.networkAllowed());
+            try {
+                result = tools.execute(call.name(), args, context);
+            } finally {
+                context.setNetworkAllowed(false);
+            }
             long duration = System.currentTimeMillis() - started;
             String output = truncate(result.output(), MAX_TOOL_OUTPUT_CHARS);
             messages.add(ChatMessage.tool(call.id(),

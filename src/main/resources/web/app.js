@@ -18,7 +18,8 @@ const PHASE_DETAIL = Object.fromEntries(PHASES.map((phase) => [phase.id, phase.d
 
 const EVENT_TYPES = [
   'run.started', 'turn.started', 'phase', 'llm.request', 'assistant', 'tool.start', 'tool.end', 'usage', 'plan',
-  'workspace', 'verification', 'compaction', 'run.succeeded', 'run.failed',
+  'workspace', 'verification', 'compaction', 'permission.request', 'permission.resolved',
+  'run.succeeded', 'run.failed',
   'run.cancelled', 'run.max_steps', 'run.finished'
 ];
 
@@ -26,6 +27,7 @@ const TERMINAL = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'MAX_STEPS']);
 const STATUS_TEXT = {
   QUEUED: 'queued',
   RUNNING: 'running',
+  WAITING_APPROVAL: 'waiting for approval',
   SUCCEEDED: 'succeeded',
   FAILED: 'failed',
   CANCELLED: 'cancelled',
@@ -59,6 +61,7 @@ const state = {
   toastTimer: null,
   usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
   verification: null,
+  pendingPermission: null,
   lastFocused: null
 };
 
@@ -100,7 +103,7 @@ function isTerminal(status) {
 function syncStartButton() {
   const keyReady = Boolean(state.config && state.config.apiKeyConfigured);
   const status = normalizeStatus(state.status);
-  const busy = Boolean(state.selectedId) && (status === 'RUNNING' || status === 'QUEUED');
+  const busy = Boolean(state.selectedId) && (status === 'RUNNING' || status === 'QUEUED' || status === 'WAITING_APPROVAL');
   $('startBtn').disabled = state.starting || !keyReady || busy;
   if (!state.starting) {
     const label = $('startBtn').querySelector('span');
@@ -287,6 +290,8 @@ async function selectRun(id) {
   state.lastSeq = 0;
   state.usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   state.verification = null;
+  state.pendingPermission = null;
+  hidePermissionCard();
   clearTimeline();
   renderPlan([]);
   renderFiles([]);
@@ -314,6 +319,7 @@ async function selectRun(id) {
     applySnapshot(snapshot, true);
     connect(id, 0);
     loadFiles();
+    loadPendingPermission(id);
     syncStartButton();
   } catch (error) {
     if (token !== state.selectionToken) return;
@@ -372,7 +378,7 @@ function setRunStatus(status) {
   const badge = $('runStatus');
   badge.className = `status-badge ${statusClass(normalized)}`;
   $('runStatusText').textContent = STATUS_TEXT[normalized] || normalized.toLowerCase();
-  const active = normalized === 'RUNNING' || normalized === 'QUEUED';
+  const active = normalized === 'RUNNING' || normalized === 'QUEUED' || normalized === 'WAITING_APPROVAL';
   $('cancelBtn').hidden = !active;
   $('telemetryLive').classList.toggle('on', normalized === 'RUNNING');
   if (normalized === 'RUNNING') {
@@ -718,6 +724,15 @@ function handleEvent(type, data, timestamp) {
       addCompaction(data, timestamp);
       break;
 
+    case 'permission.request':
+      showPermissionCard(data);
+      break;
+
+    case 'permission.resolved':
+      hidePermissionCard();
+      addPermissionResolved(data, timestamp);
+      break;
+
     case 'run.succeeded':
       setRunStatus('SUCCEEDED');
       break;
@@ -769,6 +784,99 @@ function addUserMessage(message, timestamp) {
   const body = el('div', 'user-text');
   renderMarkdown(body, String(message || ''));
   entry.append(label, body);
+  scrollTimeline(true);
+}
+
+function permissionValue(data, key) {
+  const value = data && data[key];
+  return value === undefined || value === null ? '' : String(value);
+}
+
+function showPermissionCard(data) {
+  hidePermissionCard();
+  state.pendingPermission = data;
+  state.status = 'WAITING_APPROVAL';
+  setRunStatus('WAITING_APPROVAL');
+  const card = el('div', 'permission-card');
+  card.id = 'permissionCard';
+  card.setAttribute('role', 'dialog');
+  card.setAttribute('aria-live', 'assertive');
+  const head = el('div', 'permission-head');
+  head.append(el('span', 'permission-eyebrow', 'APPROVAL REQUIRED'));
+  head.append(el('span', `permission-risk ${permissionValue(data, 'risk')}`, permissionValue(data, 'risk')));
+  card.appendChild(head);
+  card.appendChild(el('h4', null, permissionValue(data, 'summary')));
+  const meta = el('div', 'permission-meta');
+  meta.append(el('span', null, permissionValue(data, 'kind')));
+  const target = permissionValue(data, 'target');
+  if (target) meta.append(el('span', null, target));
+  card.appendChild(meta);
+  const detail = permissionValue(data, 'detail');
+  if (detail) {
+    const pre = el('pre', 'permission-detail');
+    pre.textContent = detail;
+    card.appendChild(pre);
+  }
+  card.appendChild(el('p', 'permission-expiry', 'Waiting for your decision. This request expires in 5 minutes.'));
+  const actions = el('div', 'permission-actions');
+  const deny = el('button', 'permission-btn deny', 'Deny');
+  deny.type = 'button';
+  deny.addEventListener('click', () => respondPermission('deny', 'once'));
+  const once = el('button', 'permission-btn', 'Allow once');
+  once.type = 'button';
+  once.addEventListener('click', () => respondPermission('allow', 'once'));
+  const session = el('button', 'permission-btn primary', 'Allow for session');
+  session.type = 'button';
+  session.addEventListener('click', () => respondPermission('allow', 'session'));
+  actions.append(deny, once, session);
+  card.appendChild(actions);
+  document.body.appendChild(card);
+  syncStartButton();
+}
+
+function hidePermissionCard() {
+  const card = $('permissionCard');
+  if (card) card.remove();
+  state.pendingPermission = null;
+}
+
+async function respondPermission(decision, scope) {
+  const request = state.pendingPermission;
+  const id = state.selectedId;
+  if (!request || !id) return;
+  const card = $('permissionCard');
+  if (card) card.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+  try {
+    await api(`/api/runs/${encodeURIComponent(id)}/permissions/${encodeURIComponent(request.id)}`, {
+      method: 'POST',
+      body: JSON.stringify({ decision, scope })
+    });
+    hidePermissionCard();
+    setRunStatus('RUNNING');
+    toast(decision === 'allow' ? 'Permission granted.' : 'Permission denied.');
+  } catch (error) {
+    if (card) card.querySelectorAll('button').forEach((button) => { button.disabled = false; });
+    toast(error.message, true);
+  }
+}
+
+async function loadPendingPermission(id) {
+  try {
+    const data = await api(`/api/runs/${encodeURIComponent(id)}/permissions`);
+    const pending = Array.isArray(data.pending) ? data.pending[0] : null;
+    if (pending && id === state.selectedId) {
+      showPermissionCard(pending);
+    }
+  } catch (error) {
+    // A restored session has no pending requests; ignore.
+  }
+}
+
+function addPermissionResolved(data, timestamp) {
+  const entry = traceEntry('permission', timestamp);
+  const body = el('div', 'permission-resolved');
+  body.textContent = `${permissionValue(data, 'decision')} · ${permissionValue(data, 'scope')} · ${permissionValue(data, 'reason')}`;
+  entry.appendChild(body);
   scrollTimeline(true);
 }
 

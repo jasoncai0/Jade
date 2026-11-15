@@ -9,6 +9,10 @@ import io.github.jasoncai0.agent.skill.Skill;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.tool.ToolRegistry;
 import io.github.jasoncai0.agent.tool.builtin.BuiltInTools;
+import io.github.jasoncai0.agent.permission.PermissionDecision;
+import io.github.jasoncai0.agent.permission.PermissionRequest;
+import io.github.jasoncai0.agent.permission.PermissionResult;
+import io.github.jasoncai0.agent.permission.PermissionScope;
 import io.github.jasoncai0.agent.workspace.CommandRunner;
 import io.github.jasoncai0.agent.workspace.CommandSandbox;
 import io.github.jasoncai0.agent.workspace.Workspace;
@@ -199,7 +203,8 @@ public final class AgentService implements AutoCloseable {
         control.attach(Thread.currentThread());
         try {
             AgentLoop loop = new AgentLoop(
-                    llm, tools, skills, config.agent(), config.llm().maxOutputTokens());
+                    llm, tools, skills, config.agent(), config.llm().maxOutputTokens(),
+                    new Verifier(), run.permissions(), run.permissionSession());
             RunSnapshot snapshot = continuation
                     ? loop.continueSession(userMessage, RunArtifacts.loadMessages(workspace.root()),
                             workspace, state, events, control)
@@ -239,6 +244,7 @@ public final class AgentService implements AutoCloseable {
 
     public RunSnapshot cancel(String id) {
         AgentRun run = require(id);
+        run.permissions().cancelAll("run cancelled");
         run.control().cancel();
         return run.snapshot();
     }
@@ -261,6 +267,21 @@ public final class AgentService implements AutoCloseable {
         return require(id).workspace().readText(path);
     }
 
+    public PermissionRequest pendingPermission(String id) {
+        return require(id).permissions().pendingFor(id);
+    }
+
+    public PermissionResult resolvePermission(String id, String requestId,
+                                              PermissionDecision decision, PermissionScope scope,
+                                              String reason) {
+        AgentRun run = require(id);
+        PermissionResult result = run.permissions().resolve(requestId, decision, scope, reason);
+        if (result == null) {
+            throw new IllegalStateException("No pending permission request " + requestId + " for " + id);
+        }
+        return result;
+    }
+
     public Map<String, Object> configSummary() {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("version", AppConfig.VERSION);
@@ -272,6 +293,7 @@ public final class AgentService implements AutoCloseable {
         summary.put("contextCharBudget", config.agent().contextCharBudget());
         summary.put("commandTimeoutSeconds", config.agent().commandTimeoutSeconds());
         summary.put("autoVerify", config.agent().autoVerify());
+        summary.put("permissionMode", config.agent().permissionMode().id());
         summary.put("workspaceRoot", config.workspacesDir().toString());
         summary.put("skillsDir", config.skillsDir().toString());
         summary.put("toolCount", tools.names().size());
@@ -406,6 +428,7 @@ public final class AgentService implements AutoCloseable {
             Thread.currentThread().interrupt();
         }
         for (AgentRun run : runs.values()) {
+            run.permissions().close();
             run.events().close();
         }
         Log.info("agent.service.closed", Map.of("runs", runs.size()));

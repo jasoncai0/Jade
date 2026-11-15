@@ -61,15 +61,21 @@ public final class CommandRunner {
     /** Runs a command with extra environment variables applied after the sandbox setup. */
     public CommandResult run(List<String> argv, Path cwd, int timeoutSeconds,
                              Path writableRoot, Map<String, String> extraEnvironment) {
+        return run(argv, cwd, timeoutSeconds, writableRoot, extraEnvironment, false);
+    }
+
+    public CommandResult run(List<String> argv, Path cwd, int timeoutSeconds,
+                             Path writableRoot, Map<String, String> extraEnvironment,
+                             boolean allowNetwork) {
         if (argv == null || argv.isEmpty()) {
             throw new CommandRejectedException("Command must not be empty");
         }
         int timeout = Math.max(1, Math.min(timeoutSeconds, 600));
         Path root = writableRoot == null ? cwd : writableRoot;
-        ProcessBuilder builder = new ProcessBuilder(sandbox.wrap(argv, root));
+        ProcessBuilder builder = new ProcessBuilder(sandbox.wrap(argv, root, allowNetwork));
         builder.directory(cwd.toFile());
         sanitizeEnvironment(builder.environment());
-        sandbox.prepare(builder, root);
+        sandbox.prepare(builder, root, allowNetwork);
         if (extraEnvironment != null) {
             extraEnvironment.forEach((key, value) -> {
                 if (key != null && value != null) {
@@ -140,6 +146,11 @@ public final class CommandRunner {
     }
 
     public CommandResult runShell(String command, Path cwd, int timeoutSeconds, Path writableRoot) {
+        return runShell(command, cwd, timeoutSeconds, writableRoot, false);
+    }
+
+    public CommandResult runShell(String command, Path cwd, int timeoutSeconds, Path writableRoot,
+                                  boolean allowNetwork) {
         if (command == null || command.isBlank()) {
             throw new CommandRejectedException("Command must not be blank");
         }
@@ -147,7 +158,7 @@ public final class CommandRunner {
         List<String> argv = WINDOWS
                 ? List.of("cmd.exe", "/c", command)
                 : List.of("/bin/sh", "-c", command);
-        return run(argv, cwd, timeoutSeconds, writableRoot, Map.of());
+        return run(argv, cwd, timeoutSeconds, writableRoot, Map.of(), allowNetwork);
     }
 
     public static void guard(String command) {

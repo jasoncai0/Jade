@@ -117,6 +117,43 @@ appends a user message to the transcript, and runs another bounded turn in the
 same workspace. `New run` creates a new isolated workspace. Delete a workspace
 directory to remove that session permanently.
 
+### Permission checks
+
+Tool calls are authorized before they execute. The default `balanced` mode
+asks once per session before the first workspace write and the first generated
+program run. Writes to sensitive paths (`.env`, `.git/`, `.ssh/`, `AGENTS.md`)
+always ask. Dangerous commands and network access are classified separately.
+A denied call returns a tool error to the model; it does not kill the run.
+
+Modes:
+
+| Mode | Behavior |
+|------|----------|
+| `balanced` | First write and first execution ask; dangerous/network calls ask by risk |
+| `strict` | Every write, command, and network call asks |
+| `read-only` | Writes, commands, and execution are denied |
+| `bypass` | Policy allows automatically; hard-denied commands still fail |
+
+Set `AGENT_PERMISSION_MODE` or pass `--permission-mode`. The CLI also accepts
+`--dangerously-skip-permissions` for `bypass`; it refuses automatically when
+there is no TTY.
+
+While a request is pending the run is `WAITING_APPROVAL` and the web console
+shows an inline approval card. The API is:
+
+```http
+GET  /api/runs/{id}/permissions
+POST /api/runs/{id}/permissions/{requestId}
+{"decision":"allow","scope":"session"}
+```
+
+`scope` is `once` or `session`. Requests expire after 300 seconds and are
+denied. Every decision is appended to `.agent/permissions.jsonl`; paths,
+commands, and hosts are recorded, file contents and environment variables are
+not. This is an authorization UX, not a security boundary: an approved command
+can still read what your user account can read. The macOS sandbox remains the
+write/network guard.
+
 ### LLM request trace
 
 Every model call emits a `llm.request` event with the exact JSON body sent to
@@ -300,6 +337,8 @@ Errors use the HTTP status as `code` and `data: null`.
 | GET | `/api/runs` | run snapshots, newest first |
 | POST | `/api/runs` | start `{task, workspace?}`; returns 202 |
 | POST | `/api/runs/{id}/messages` | follow up `{message}` in the same session; returns 202 |
+| GET | `/api/runs/{id}/permissions` | pending approval requests |
+| POST | `/api/runs/{id}/permissions/{requestId}` | resolve `{decision, scope}` |
 | GET | `/api/runs/{id}` | one run snapshot |
 | POST | `/api/runs/{id}/cancel` | request cancellation |
 | GET | `/api/runs/{id}/files` | workspace file listing |
@@ -454,7 +493,8 @@ docs/                             architecture and demo script
 
 - No authentication or multi-user tenancy; this is a local demo.
 - No container or VM isolation. The macOS sandbox is a write/network jail;
-  reads and process state remain shared with the host.
+  reads and process state remain shared with the host. Permission prompts are
+  an audit/authorization layer, not a kernel security boundary.
 - No debugger integration (`jdb`, `pdb`, Node inspector). Debugging means
   reading compiler/runtime output, reproducing the failure, and repairing the
   source.

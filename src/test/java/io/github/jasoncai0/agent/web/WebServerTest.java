@@ -13,6 +13,7 @@ import io.github.jasoncai0.agent.llm.ChatResult;
 import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.llm.ToolCall;
 import io.github.jasoncai0.agent.llm.Usage;
+import io.github.jasoncai0.agent.permission.PermissionMode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -145,6 +146,58 @@ class WebServerTest {
             assertEquals(2, countOccurrences(events.body(), "event: run.finished"), events.body());
             assertTrue(events.body().contains("event: stream_end"));
 
+        } finally {
+            server.close();
+            service.close();
+        }
+    }
+
+    @Test
+    void permissionApiApprovesAWrite() throws Exception {
+        Path root = temp.resolve("permission-app");
+        Path skills = root.resolve("skills");
+        Files.createDirectories(skills);
+        AppConfig config = new AppConfig(
+                root,
+                skills,
+                root.resolve("runs"),
+                new LlmSettings("sk-test", "http://127.0.0.1:1", "deepseek-chat", 5, 1024),
+                new AgentSettings(3, 3, 20_000, 30, true, PermissionMode.BALANCED),
+                new ServerSettings("127.0.0.1", 0)
+        );
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.script.add(new ChatResult(null, null,
+                List.of(new ToolCall("call-permission", "write_file",
+                        JSON.writeValueAsString(Map.of("path", "src/Main.java", "content", "public class Main {}")))),
+                "tool_calls", new Usage(10, 5, 15)));
+        llm.script.add(new ChatResult("Wrote it.", null, List.of(), "stop", new Usage(12, 4, 16)));
+
+        AgentService service = new AgentService(config, llm);
+        WebServer server = new WebServer(service, config.server());
+        try {
+            server.start();
+            String base = server.url();
+            HttpResponse<String> created = post(base + "/api/runs", "{\"task\":\"Write a file\"}");
+            assertEquals(202, created.statusCode());
+            String runId = JSON.readTree(created.body()).path("data").path("run").path("id").asText();
+
+            JsonNode pending = JSON.readTree(get(base + "/api/runs/" + runId + "/permissions").body());
+            for (int i = 0; i < 100 && pending.path("data").path("pending").isEmpty(); i++) {
+                Thread.sleep(25);
+                pending = JSON.readTree(get(base + "/api/runs/" + runId + "/permissions").body());
+            }
+            assertTrue(pending.path("data").path("pending").size() > 0, pending.toString());
+            String requestId = pending.path("data").path("pending").get(0).path("id").asText();
+
+            assertEquals("WAITING_APPROVAL", service.require(runId).snapshot().status());
+            HttpResponse<String> resolved = post(
+                    base + "/api/runs/" + runId + "/permissions/" + requestId,
+                    "{\"decision\":\"allow\",\"scope\":\"once\"}");
+            assertEquals(200, resolved.statusCode(), resolved.body());
+            assertEquals("SUCCEEDED", service.await(runId, Duration.ofSeconds(20)).status());
+            assertTrue(service.readFile(runId, "src/Main.java").contains("class Main"));
+            assertTrue(Files.isRegularFile(root.resolve("runs").resolve(service.require(runId).state().workspace())
+                    .resolve(".agent/permissions.jsonl")));
         } finally {
             server.close();
             service.close();

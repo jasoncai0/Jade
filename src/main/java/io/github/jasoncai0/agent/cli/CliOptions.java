@@ -1,5 +1,7 @@
 package io.github.jasoncai0.agent.cli;
 
+import io.github.jasoncai0.agent.permission.PermissionMode;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -13,7 +15,9 @@ public record CliOptions(
         Integer port,
         String host,
         boolean help,
-        boolean version
+        boolean version,
+        PermissionMode permissionMode,
+        boolean dangerouslySkipPermissions
 ) {
     public enum Mode {
         SERVE, TASK, CHECK, PING
@@ -30,6 +34,8 @@ public record CliOptions(
         boolean version = false;
         boolean check = false;
         boolean ping = false;
+        PermissionMode permissionMode = null;
+        boolean dangerouslySkipPermissions = false;
 
         List<String> list = new ArrayList<>(List.of(args));
         for (int i = 0; i < list.size(); i++) {
@@ -70,12 +76,18 @@ public record CliOptions(
                     String value = inline != null ? inline : requireValue(list, ++i, name);
                     host = value;
                 }
+                case "--permission-mode" -> {
+                    String value = inline != null ? inline : requireValue(list, ++i, name);
+                    permissionMode = PermissionMode.fromId(value);
+                }
+                case "--dangerously-skip-permissions" -> dangerouslySkipPermissions = true;
                 default -> throw new IllegalArgumentException("Unknown option: " + raw);
             }
         }
 
         if (help || version) {
-            return new CliOptions(Mode.SERVE, task, taskFile, workspace, maxSteps, port, host, help, version);
+            return new CliOptions(Mode.SERVE, task, taskFile, workspace, maxSteps, port, host, help, version,
+                    permissionMode, dangerouslySkipPermissions);
         }
         int modes = (check ? 1 : 0) + (ping ? 1 : 0) + (task != null || taskFile != null ? 1 : 0);
         if (modes > 1) {
@@ -98,7 +110,15 @@ public record CliOptions(
         }
         Mode mode = check ? Mode.CHECK : ping ? Mode.PING
                 : (task != null || taskFile != null) ? Mode.TASK : Mode.SERVE;
-        return new CliOptions(mode, task, taskFile, workspace, maxSteps, port, host, false, false);
+        if (dangerouslySkipPermissions && permissionMode != null) {
+            throw new IllegalArgumentException(
+                    "--dangerously-skip-permissions cannot be combined with --permission-mode");
+        }
+        if (dangerouslySkipPermissions) {
+            permissionMode = PermissionMode.BYPASS;
+        }
+        return new CliOptions(mode, task, taskFile, workspace, maxSteps, port, host, false, false,
+                permissionMode, dangerouslySkipPermissions);
     }
 
     private static String requireValue(List<String> args, int index, String option) {
@@ -138,6 +158,8 @@ public record CliOptions(
                   --max-steps <1-30>     model turns per run (default 10)
                   --port <0-65535>       web port (default 8080; 0 picks a free port)
                   --host <host>          bind host (default 127.0.0.1)
+                  --permission-mode <m>  balanced (default), strict, read-only, bypass
+                  --dangerously-skip-permissions  explicit bypass; dangerous
                   --check                validate config, JDK, tools, and skills
                   --ping                 make one small DeepSeek request
                   --version              print the version
@@ -149,6 +171,7 @@ public record CliOptions(
                   DEEPSEEK_MODEL         default deepseek-chat
                   AGENT_AUTO_VERIFY      default true
                   AGENT_MAX_STEPS        default 10
+                  AGENT_PERMISSION_MODE  default balanced
                   AGENT_PORT             default 8080
 
                 Examples:
