@@ -70,7 +70,7 @@ SandboxSession
 | 变量 | 取值 | 默认 | 说明 |
 |---|---|---|---|
 | `AGENT_SANDBOX_BACKEND` | `local` / `docker` | `local` | 不设 `auto`，避免静默切换 |
-| `AGENT_SANDBOX` | `auto` / `off` / `required` | `auto` | 仅控制 local 的 `sandbox-exec` |
+| `AGENT_SANDBOX` | `off` / `auto` / `required` | `off` | 仅控制 local 的 `sandbox-exec`；默认本地直跑 |
 | `AGENT_SANDBOX_NETWORK` | `true` / `false` | `false` | local 模式网络开关 |
 | `AGENT_SANDBOX_DOCKER_IMAGE` | `image:digest` | `jade-sandbox:1` | docker 插件使用 |
 | `AGENT_SANDBOX_DOCKER_NETWORK` | `off` / `on` / `preview` | `off` | docker 插件网络策略 |
@@ -81,7 +81,7 @@ SandboxSession
 
 兼容：
 
-- `AGENT_SANDBOX` 的旧语义保持不变：`off` 不套 `sandbox-exec`，`auto` 可用时套，`required` 不可用则拒绝启动。它只影响 local，不影响 Docker。
+- `AGENT_SANDBOX` 语义：`off` 不套 `sandbox-exec`，`auto` 可用时套，`required` 不可用则拒绝启动；默认 `off`，本地执行优先。它只影响 local，不影响 Docker。
 - `AGENT_SANDBOX_BACKEND` 未设置时固定 `local`；不根据 Docker 是否存在自动切换。
 - `AGENT_SANDBOX_BACKEND=docker` 但插件缺失：启动失败并提示安装插件，不回退。用户显式选择时，失败要明确。
 

@@ -161,7 +161,9 @@ public final class CommandSandbox {
 
     private static Mode parseMode(String raw) {
         if (raw == null || raw.isBlank()) {
-            return Mode.AUTO;
+            // Local execution is the default. Users who want the macOS write
+            // jail must opt in with AGENT_SANDBOX=auto (or required).
+            return Mode.OFF;
         }
         return switch (raw.trim().toLowerCase(Locale.ROOT)) {
             case "off", "false", "none" -> Mode.OFF;

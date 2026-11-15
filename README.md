@@ -151,8 +151,8 @@ POST /api/runs/{id}/permissions/{requestId}
 denied. Every decision is appended to `.agent/permissions.jsonl`; paths,
 commands, and hosts are recorded, file contents and environment variables are
 not. This is an authorization UX, not a security boundary: an approved command
-can still read what your user account can read. The macOS sandbox remains the
-write/network guard.
+can still read what your user account can read. The optional macOS sandbox can
+add a write/network jail, but it is off by default for local execution.
 
 ### LLM request trace
 
@@ -422,7 +422,7 @@ Environment variables take precedence over `.env`:
 | `AGENT_CONTEXT_CHAR_BUDGET` | `120000` | compaction budget |
 | `AGENT_COMMAND_TIMEOUT_SECONDS` | `120` | default command timeout |
 | `AGENT_AUTO_VERIFY` | `true` | compile gate before final answer |
-| `AGENT_SANDBOX` | `auto` | `auto`, `off`, or `required`; macOS write jail |
+| `AGENT_SANDBOX` | `off` | `off` (default local execution), `auto`, or `required`; macOS write jail |
 | `AGENT_SANDBOX_NETWORK` | `false` | allow network inside the sandbox |
 | `AGENT_HOST` | `127.0.0.1` | HTTP bind address |
 | `AGENT_PORT` | `8080` | HTTP port, `0` chooses a free port |
@@ -461,11 +461,13 @@ The suite has 32 tests:
   including symlink resolution.
 - File reads are capped at 512 KiB, writes at 1 MiB, command output at 200,000
   characters per stream, and tool output at 30,000 characters in the prompt.
-- On macOS, commands run through `sandbox-exec` with writes confined to the run
-  workspace and a private temp directory; network is denied by default. Set
-  `AGENT_SANDBOX=required` to refuse startup when the jail is unavailable, or
-  `off` to disable it. Reads, process state, and the kernel are shared with the
-  host; this is a write/network jail, not a container or VM.
+- Local execution is the default: `AGENT_SANDBOX=off`. Commands run as your
+  user without an OS jail, so Maven, Spring Boot, and localhost servers behave
+  normally. Set `AGENT_SANDBOX=auto` to opt into the macOS `sandbox-exec` write
+  jail (writes confined to the run workspace and a private temp directory,
+  network denied unless enabled), or `required` to refuse startup when the jail
+  is unavailable. The jail is not a container or VM; reads, process state, and
+  the kernel are shared with the host.
 - The shell still has a sanitized environment and a small destructive-command
   blocklist (`sudo`, `mkfs`, `dd` to block devices, fork bombs, `rm -rf /`).
 - API keys are redacted from structured logs and omitted from `/api/config`.
@@ -492,9 +494,10 @@ docs/                             architecture and demo script
 ## Limitations
 
 - No authentication or multi-user tenancy; this is a local demo.
-- No container or VM isolation. The macOS sandbox is a write/network jail;
-  reads and process state remain shared with the host. Permission prompts are
-  an audit/authorization layer, not a kernel security boundary.
+- No container or VM isolation. Local commands run as your user by default;
+  the optional macOS sandbox is only a write/network jail, and reads/process
+  state remain shared with the host. Permission prompts are an
+  audit/authorization layer, not a kernel security boundary.
 - No debugger integration (`jdb`, `pdb`, Node inspector). Debugging means
   reading compiler/runtime output, reproducing the failure, and repairing the
   source.
