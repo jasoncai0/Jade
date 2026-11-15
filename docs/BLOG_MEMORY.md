@@ -28,6 +28,8 @@
 | 8 | 2026-11-14 | 验证门 | 编译成功即标 verified，运行失败仍可能 `SUCCEEDED` | `run_java` 在进程启动前就置 verified | 建议运行 exit 0 才算；当前仍未完全修完，文章标记为 open limitation | 7 |
 | 9 | 2026-11-14 | 会话恢复 | 重启后 `/api/runs` 为空；事件日志缺 `run.finished` | 只存在内存；先持久化后发终止事件 | 恢复 transcript/events；最后再持久化一次；RUNNING 改 FAILED | 8 |
 | 10 | 2026-11-15 | Trace | 请求体包含完整上下文，展开后可能泄露敏感内容 | 只防了 Authorization，没防 body | 默认折叠；不写普通日志；run 目录按敏感数据管理 | 9 |
+| 11 | 2026-11-15 | 连续会话 | 第一轮结束后无法追问，SSE 已断开 | `run.finished` 被当成会话终点；`AgentLoop` 每轮关闭事件日志 | 日志保留到服务停机；`run.finished` 按轮发；新增 `turn.started`；UI 不断 SSE、按 `lastSeq` 续连 | 8.1 |
+| 12 | 2026-11-15 | 前端状态 | 空状态下 Start 按钮被禁用 | 初始 `status` 未定义，busy 判断把空状态当运行中 | 初始状态 `IDLE`；busy 仅在选中会话且 RUNNING/QUEUED 时成立 | 8.1 |
 
 ## 发布记录
 
@@ -35,6 +37,7 @@
 |---|---|---|---|
 | 2026-11-15 | 创建文章与 3 张图 | 构建通过 | 图：架构、MAX_STEPS 归因、沙箱边界 |
 | 2026-11-15 16:59 | 发布 `coding-agent-pitfalls` | 线上 200，3 张图 200 | 发布备份 `/home/ubuntu/backups/blog-20261115-165933`；blog commit `36ca398` |
+| 2026-11-15 17:15 | 补充连续会话与前端状态两坑 | 线上 200，8.1 节可见 | blog commit `f9e23ae`；基线 `73bb075`；备份 `/home/ubuntu/backups/blog-20261115-171539` |
 
 ## 待办
 
