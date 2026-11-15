@@ -12,7 +12,7 @@
 | 线上地址 | https://www.jasoncai.site/posts/coding-agent-pitfalls.html |
 | 博客源码 | `~/Documents/deepseek-harness/default-workspace/blog/content/posts/coding-agent-pitfalls/` |
 | 标签 | `harness`, `codegen`, `architecture` |
-| 发布状态 | 已发布（2026-11-15 23:01） |
+| 发布状态 | 已发布（2026-11-15 23:14） |
 
 ## 踩坑账本
 
@@ -31,6 +31,7 @@
 | 11 | 2026-11-15 | 连续会话 | 第一轮结束后无法追问，SSE 已断开 | `run.finished` 被当成会话终点；`AgentLoop` 每轮关闭事件日志 | 日志保留到服务停机；`run.finished` 按轮发；新增 `turn.started`；UI 不断 SSE、按 `lastSeq` 续连 | 8.1 |
 | 12 | 2026-11-15 | 前端状态 | 空状态下 Start 按钮被禁用 | 初始 `status` 未定义，busy 判断把空状态当运行中 | 初始状态 `IDLE`；busy 仅在选中会话且 RUNNING/QUEUED 时成立 | 8.1 |
 | 13 | 2026-11-15 | 权限 UI | 后端 `WAITING_APPROVAL`、API 有 pending，页面看不到审批按钮 | 卡片 append 在 Live Trace 滚动区末尾；prepend 后仍可能落在 950px 视口下方 | 卡片移出时间线，挂到 `document.body`，固定底部 overlay；刷新补拉 pending | 8.2 |
+| 14 | 2026-11-15 | 沙箱默认 | Spring Boot 已生成并通过测试，启动仍 `SocketException: Operation not permitted`；`/health` HTTP 000 | `AGENT_SANDBOX=auto` 默认开启写监狱，`AGENT_SANDBOX_NETWORK=0` 在进程创建时锁死网络；Maven 缓存/JVM temp 也受写限制 | 默认改 `off` 本地直接执行；需要隔离时显式 `auto`/`required`；同一 Spring Boot 会话复跑，8080 `/health` 200 | 4.1 |
 
 ## 发布记录
 
@@ -40,6 +41,7 @@
 | 2026-11-15 16:59 | 发布 `coding-agent-pitfalls` | 线上 200，3 张图 200 | 发布备份 `/home/ubuntu/backups/blog-20261115-165933`；blog commit `36ca398` |
 | 2026-11-15 17:15 | 补充连续会话与前端状态两坑 | 线上 200，8.1 节可见 | blog commit `f9e23ae`；基线 `73bb075`；备份 `/home/ubuntu/backups/blog-20261115-171539` |
 | 2026-11-15 23:01 | 补充权限审批卡可见性坑 | 线上 200，8.2 节可见 | blog commit `0f8da6d`；备份 `/home/ubuntu/backups/blog-20261115-230109` |
+| 2026-11-15 23:14 | 补充默认沙箱导致本地服务起不来 | 线上 200，4.1 节可见 | blog commit `487138a`；备份 `/home/ubuntu/backups/blog-20261115-231355` |
 
 ## 待办
 
