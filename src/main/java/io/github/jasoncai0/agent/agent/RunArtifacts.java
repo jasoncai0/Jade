@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.jasoncai0.agent.llm.ChatMessage;
+import io.github.jasoncai0.agent.llm.Role;
 import io.github.jasoncai0.agent.llm.ToolCall;
 import io.github.jasoncai0.agent.llm.Usage;
 import io.github.jasoncai0.agent.workspace.Workspace;
@@ -126,6 +127,59 @@ public final class RunArtifacts {
             return Optional.of(new StoredRun(snapshot, List.copyOf(events)));
         } catch (IOException | RuntimeException e) {
             return Optional.empty();
+        }
+    }
+
+    /**
+     * Reads the persisted conversation so a follow-up turn can continue with
+     * the same history instead of starting from a synthetic task message.
+     */
+    public static List<ChatMessage> loadMessages(Path workspaceRoot) {
+        Path transcript = workspaceRoot.resolve(TRANSCRIPT);
+        if (!Files.isRegularFile(transcript)) {
+            return List.of();
+        }
+        try {
+            JsonNode root = JSON.readTree(transcript.toFile());
+            JsonNode messages = root == null ? null : root.get("messages");
+            if (messages == null || !messages.isArray()) {
+                return List.of();
+            }
+            List<ChatMessage> result = new ArrayList<>();
+            for (JsonNode node : messages) {
+                if (node == null || !node.isObject()) {
+                    continue;
+                }
+                String roleName = text(node, "role", "user").toUpperCase(java.util.Locale.ROOT);
+                Role role;
+                try {
+                    role = Role.valueOf(roleName);
+                } catch (IllegalArgumentException e) {
+                    continue;
+                }
+                String content = text(node, "content", null);
+                String toolCallId = text(node, "toolCallId", null);
+                String reasoning = text(node, "reasoningContent", null);
+                List<ToolCall> calls = new ArrayList<>();
+                JsonNode callNodes = node.get("toolCalls");
+                if (callNodes != null && callNodes.isArray()) {
+                    for (JsonNode call : callNodes) {
+                        if (call == null || !call.isObject()) {
+                            continue;
+                        }
+                        String callId = text(call, "id", null);
+                        String name = text(call, "name", null);
+                        if (name == null || name.isBlank()) {
+                            continue;
+                        }
+                        calls.add(new ToolCall(callId, name, text(call, "arguments", "{}")));
+                    }
+                }
+                result.add(new ChatMessage(role, content, toolCallId, calls, reasoning));
+            }
+            return List.copyOf(result);
+        } catch (IOException | RuntimeException e) {
+            return List.of();
         }
     }
 

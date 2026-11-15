@@ -85,8 +85,14 @@ if not finished:
     verify dirty workspace if possible
     finish as max_steps
 finally:
-    persist transcript/events/final.md; emit run.finished; close log
+    persist transcript/events/final.md; emit run.finished
+    # log stays open for follow-ups; AgentService closes it on shutdown
 ```
+
+`run.finished` is emitted once per user turn, not once per session. The event log
+remains open between turns so the browser keeps one SSE connection. A follow-up
+reopens a restored session's log, appends the user message to the transcript,
+and runs another bounded turn in the same workspace.
 
 `maxToolCallsPerStep` does not drop calls. Calls beyond the limit receive a tool
 message explaining the limit, so the assistant/tool pairing stays valid.
@@ -219,6 +225,7 @@ Key events:
 | Event | Data |
 |-------|------|
 | `run.started` | initial `snapshot` |
+| `turn.started` | follow-up `message`, `snapshot` |
 | `phase` | `phase`, `label`, `description`, `detail`, `step`, `maxSteps` |
 | `llm.request` | exact request `body`, `step`, `messages`, `tools`, `chars` |
 | `assistant` | `content`, `reasoning`, `finishReason`, `toolCalls` |
@@ -241,7 +248,10 @@ readable until the user expands it.
 
 Terminal sessions are replayed from `.agent/events.jsonl`. If an older run has
 no `run.finished` event, loading synthesizes one from `transcript.json` so the
-restored timeline still ends with a final card.
+restored timeline still ends with a final card. Restored logs start closed; a
+follow-up calls `open()` and appends new events, while the UI reconnects from
+its last sequence number. `stream_end` is sent only when the service shuts the
+log down, not after each turn.
 
 `ChatRequest` optionally carries `ResponseFormat` (`text` or `json_object`) and
 each `ToolSpec` carries a `strict` flag. `DeepSeekClient` serializes

@@ -68,6 +68,18 @@ class WebServerTest {
                         JSON.writeValueAsString(Map.of("path", "src/Hello.java", "content", source)))),
                 "tool_calls", new Usage(10, 5, 15)));
         llm.script.add(new ChatResult("Built Hello.", null, List.of(), "stop", new Usage(12, 4, 16)));
+        String updated = """
+                public class Hello {
+                    public static void main(String[] args) {
+                        System.out.println("built-by-web-2");
+                    }
+                }
+                """;
+        llm.script.add(new ChatResult(null, null,
+                List.of(new ToolCall("call-2", "write_file",
+                        JSON.writeValueAsString(Map.of("path", "src/Hello.java", "content", updated)))),
+                "tool_calls", new Usage(10, 5, 15)));
+        llm.script.add(new ChatResult("Updated Hello.", null, List.of(), "stop", new Usage(12, 4, 16)));
 
         AgentService service = new AgentService(config, llm);
         WebServer server = new WebServer(service, config.server());
@@ -109,18 +121,44 @@ class WebServerTest {
             assertTrue(JSON.readTree(file.body()).path("data").path("content").asText()
                     .contains("built-by-web"));
 
-            HttpResponse<String> events = get(base + "/api/runs/" + runId + "/events");
-            assertTrue(events.body().contains("event: phase"), events.body());
-            assertTrue(events.body().contains("event: run.finished"));
-            assertTrue(events.body().contains("event: stream_end"));
+            HttpResponse<String> followUp = post(base + "/api/runs/" + runId + "/messages",
+                    "{\"message\":\"Change the message to built-by-web-2\"}");
+            assertEquals(202, followUp.statusCode(), followUp.body());
+            assertEquals("RUNNING", JSON.readTree(followUp.body()).path("data").path("run")
+                    .path("status").asText());
+
+            RunSnapshot updatedSnapshot = service.await(runId, Duration.ofSeconds(20));
+            assertEquals("SUCCEEDED", updatedSnapshot.status());
+            assertEquals("Updated Hello.", updatedSnapshot.finalAnswer());
+            assertTrue(service.readFile(runId, "src/Hello.java").contains("built-by-web-2"));
 
             HttpResponse<String> invalid = post(base + "/api/runs", "{}");
             assertEquals(400, invalid.statusCode());
             assertEquals(400, JSON.readTree(invalid.body()).path("code").asInt());
+
+            // The live session keeps this SSE stream open. Closing the service closes
+            // the event log, which lets a replay request finish and emit stream_end.
+            service.close();
+            HttpResponse<String> events = get(base + "/api/runs/" + runId + "/events");
+            assertTrue(events.body().contains("event: turn.started"), events.body());
+            assertTrue(events.body().contains("event: phase"), events.body());
+            assertEquals(2, countOccurrences(events.body(), "event: run.finished"), events.body());
+            assertTrue(events.body().contains("event: stream_end"));
+
         } finally {
             server.close();
             service.close();
         }
+    }
+
+    private static int countOccurrences(String value, String needle) {
+        int count = 0;
+        int index = 0;
+        while ((index = value.indexOf(needle, index)) >= 0) {
+            count++;
+            index += needle.length();
+        }
+        return count;
     }
 
     private HttpResponse<String> get(String url) throws Exception {

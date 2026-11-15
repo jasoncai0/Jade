@@ -92,6 +92,8 @@ public final class WebServer implements AutoCloseable {
             sendError(exchange, 404, e.getMessage() == null ? "Not found" : e.getMessage());
         } catch (IllegalArgumentException | WorkspaceException e) {
             sendError(exchange, 400, e.getMessage() == null ? "Bad request" : e.getMessage());
+        } catch (IllegalStateException e) {
+            sendError(exchange, 409, e.getMessage() == null ? "Session is busy" : e.getMessage());
         } catch (Exception e) {
             Log.error("web.request_failed", e, Map.of("path", exchange.getRequestURI().getPath()));
             if (!headersSent(exchange)) {
@@ -166,6 +168,10 @@ public final class WebServer implements AutoCloseable {
             sendData(exchange, 200, agentService.cancel(id));
             return;
         }
+        if (action.equals("messages") && method.equals("POST")) {
+            followUp(exchange, id);
+            return;
+        }
         if (action.equals("files") && method.equals("GET")) {
             AgentRun run = agentService.require(id);
             List<Map<String, Object>> files = new ArrayList<>();
@@ -216,6 +222,20 @@ public final class WebServer implements AutoCloseable {
         } catch (IllegalArgumentException e) {
             sendError(exchange, 400, e.getMessage());
         }
+    }
+
+    private void followUp(HttpExchange exchange, String id) throws IOException {
+        JsonNode body = readJson(exchange);
+        if (body == null || !body.isObject()) {
+            sendError(exchange, 400, "JSON body must be an object");
+            return;
+        }
+        String message = body.path("message").asText(null);
+        RunSnapshot snapshot = agentService.followUp(id, message);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("run", snapshot);
+        data.put("eventsUrl", "/api/runs/" + snapshot.id() + "/events");
+        sendData(exchange, 202, data);
     }
 
     private void streamEvents(HttpExchange exchange, String id) throws IOException {

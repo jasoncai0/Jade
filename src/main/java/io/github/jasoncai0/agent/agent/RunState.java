@@ -133,6 +133,23 @@ public final class RunState {
         status = RunStatus.RUNNING.name();
     }
 
+    /**
+     * Starts a new user turn in the same session. Conversation history and the
+     * workspace survive; the per-turn phase/step/verification state resets.
+     */
+    public synchronized void beginTurn() {
+        status = RunStatus.RUNNING.name();
+        phase = AgentPhase.INTAKE.id();
+        phaseLabel = AgentPhase.INTAKE.label();
+        step = 0;
+        finalAnswer = null;
+        error = null;
+        verification = null;
+        finishedAt = 0;
+        plan.clear();
+        plan.addAll(defaultPlan());
+    }
+
     public synchronized void setPhase(AgentPhase next, int stepNumber) {
         this.phase = next.id();
         this.phaseLabel = next.label();

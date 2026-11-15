@@ -17,7 +17,7 @@ const PHASE_LABEL = Object.fromEntries(PHASES.map((phase) => [phase.id, phase.la
 const PHASE_DETAIL = Object.fromEntries(PHASES.map((phase) => [phase.id, phase.detail]));
 
 const EVENT_TYPES = [
-  'run.started', 'phase', 'llm.request', 'assistant', 'tool.start', 'tool.end', 'usage', 'plan',
+  'run.started', 'turn.started', 'phase', 'llm.request', 'assistant', 'tool.start', 'tool.end', 'usage', 'plan',
   'workspace', 'verification', 'compaction', 'run.succeeded', 'run.failed',
   'run.cancelled', 'run.max_steps', 'run.finished'
 ];
@@ -38,6 +38,7 @@ const state = {
   skills: [],
   runs: [],
   selectedId: null,
+  status: 'IDLE',
   es: null,
   selectionToken: 0,
   currentStep: 0,
@@ -52,6 +53,7 @@ const state = {
   starting: false,
   startedAt: 0,
   finishedAt: 0,
+  lastSeq: 0,
   elapsedTimer: null,
   fileTimer: null,
   toastTimer: null,
@@ -97,7 +99,15 @@ function isTerminal(status) {
 
 function syncStartButton() {
   const keyReady = Boolean(state.config && state.config.apiKeyConfigured);
-  $('startBtn').disabled = state.starting || !keyReady;
+  const status = normalizeStatus(state.status);
+  const busy = Boolean(state.selectedId) && (status === 'RUNNING' || status === 'QUEUED');
+  $('startBtn').disabled = state.starting || !keyReady || busy;
+  if (!state.starting) {
+    const label = $('startBtn').querySelector('span');
+    if (label) {
+      label.textContent = busy ? 'Agent running…' : state.selectedId ? 'Send follow-up' : 'Start agent';
+    }
+  }
 }
 
 function updateCharCount() {
@@ -229,6 +239,8 @@ function showEmpty() {
   $('statTurns').textContent = '0';
   renderVerificationPending();
   $('artifactLine').classList.add('hidden');
+  state.status = 'IDLE';
+  syncStartButton();
 }
 
 function renderRunList() {
@@ -272,6 +284,7 @@ async function selectRun(id) {
   state.finishRendered = false;
   state.startedAt = 0;
   state.finishedAt = 0;
+  state.lastSeq = 0;
   state.usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   state.verification = null;
   clearTimeline();
@@ -299,8 +312,9 @@ async function selectRun(id) {
     const snapshot = await api(`/api/runs/${encodeURIComponent(id)}`);
     if (token !== state.selectionToken) return;
     applySnapshot(snapshot, true);
-    connect(id);
+    connect(id, 0);
     loadFiles();
+    syncStartButton();
   } catch (error) {
     if (token !== state.selectionToken) return;
     toast(error.message, true);
@@ -366,6 +380,7 @@ function setRunStatus(status) {
   } else if (isTerminal(normalized)) {
     stopTimer();
   }
+  syncStartButton();
 }
 
 /* ------------------------------------------------------------------ plan / files / telemetry */
@@ -560,9 +575,11 @@ function setStreamState(value) {
   }
 }
 
-function connect(id) {
+function connect(id, after = 0) {
   stopStream();
-  const es = new EventSource(`/api/runs/${encodeURIComponent(id)}/events`);
+  state.lastSeq = after;
+  const suffix = after > 0 ? `?after=${after}` : '';
+  const es = new EventSource(`/api/runs/${encodeURIComponent(id)}/events${suffix}`);
   state.es = es;
   setStreamState('connecting');
 
@@ -571,6 +588,7 @@ function connect(id) {
       if (state.es !== es) return;
       try {
         const payload = JSON.parse(event.data);
+        state.lastSeq = Number(payload.seq || state.lastSeq || 0);
         handleEvent(payload.type || type, payload.data || {}, payload.timestamp);
       } catch (error) {
         console.error('Cannot parse event', error);
@@ -631,6 +649,10 @@ function handleEvent(type, data, timestamp) {
   switch (type) {
     case 'run.started':
       if (data.snapshot) applySnapshot(data.snapshot, true);
+      break;
+
+    case 'turn.started':
+      beginFollowUpTurn(data, timestamp);
       break;
 
     case 'phase': {
@@ -723,6 +745,33 @@ function handleEvent(type, data, timestamp) {
   }
 }
 
+function beginFollowUpTurn(data, timestamp) {
+  state.terminal = false;
+  state.finishRendered = false;
+  state.visited.clear();
+  state.currentStep = 0;
+  state.activePhase = null;
+  state.phaseDetail = '';
+  state.verification = null;
+  if (data.snapshot) applySnapshot(data.snapshot, false);
+  setRunStatus('RUNNING');
+  renderVerificationPending();
+  addUserMessage(data.message || 'Follow-up', timestamp);
+  renderPhases();
+  renderPhaseDetail();
+  if (!state.startedAt) state.startedAt = timestamp || Date.now();
+  startTimer();
+}
+
+function addUserMessage(message, timestamp) {
+  const { entry } = traceEntry('user', timestamp);
+  const label = el('div', 'user-label', 'you');
+  const body = el('div', 'user-text');
+  renderMarkdown(body, String(message || ''));
+  entry.append(label, body);
+  scrollTimeline(true);
+}
+
 function finalizeRun(snapshot) {
   applySnapshot(snapshot, false);
   state.terminal = true;
@@ -735,8 +784,10 @@ function finalizeRun(snapshot) {
   }
   state.runs = state.runs.map((run) => (run.id === snapshot.id ? { ...run, ...snapshot } : run));
   renderRunList();
-  setStreamState('closed');
-  stopStream();
+  // The session log stays open after a turn so a follow-up can reuse this SSE
+  // connection. Only a closing server emits stream_end.
+  if (state.es) setStreamState('live');
+  syncStartButton();
 }
 
 /* ------------------------------------------------------------------ timeline */
@@ -763,7 +814,7 @@ function traceEntry(kind, timestamp) {
   const entry = el('div', `trace-entry ${kind}`);
   const dot = el('div', 'trace-dot');
   const top = el('div', 'trace-top');
-  const kindLabel = kind === 'verify' ? 'verification' : kind === 'tool' ? 'tool call' : kind === 'llm' ? 'llm request' : kind;
+  const kindLabel = kind === 'verify' ? 'verification' : kind === 'tool' ? 'tool call' : kind === 'llm' ? 'llm request' : kind === 'user' ? 'you' : kind;
   const label = el('span', 'trace-kind', kindLabel);
   const time = el('span', 'trace-time', timeLabel(timestamp));
   top.append(label, time);
@@ -1066,23 +1117,40 @@ async function startRun() {
   syncStartButton();
   const label = $('startBtn').querySelector('span');
   label.textContent = 'Starting…';
+  const continuing = Boolean(state.selectedId && state.terminal);
   try {
-    const result = await api('/api/runs', {
-      method: 'POST',
-      body: JSON.stringify({ task })
-    });
+    const result = continuing
+      ? await api(`/api/runs/${encodeURIComponent(state.selectedId)}/messages`, {
+          method: 'POST',
+          body: JSON.stringify({ message: task })
+        })
+      : await api('/api/runs', {
+          method: 'POST',
+          body: JSON.stringify({ task })
+        });
     const snapshot = result.run;
     state.runs = [snapshot, ...state.runs.filter((run) => run.id !== snapshot.id)];
     renderRunList();
     $('taskInput').value = '';
     updateCharCount();
-    await selectRun(snapshot.id);
-    toast('Run started. The agent is working in an isolated workspace.');
+    if (continuing) {
+      state.terminal = false;
+      state.finishRendered = false;
+      state.visited.clear();
+      state.currentStep = 0;
+      state.verification = null;
+      applySnapshot(snapshot, false);
+      renderVerificationPending();
+      if (!state.es) connect(snapshot.id, state.lastSeq);
+      toast('Follow-up sent. The session keeps its workspace and transcript.');
+    } else {
+      await selectRun(snapshot.id);
+      toast('Run started. The agent is working in an isolated workspace.');
+    }
   } catch (error) {
     toast(error.message, true);
   } finally {
     state.starting = false;
-    label.textContent = 'Start agent';
     syncStartButton();
   }
 }
@@ -1139,7 +1207,7 @@ function showHowItWorks() {
   openModal('How the agent works');
   const body = $('modalBody');
   body.appendChild(el('p', 'modal-lede',
-    'Jade runs a full ten-phase pipeline on every model turn. A run is capped at ten turns, so it can inspect, edit, compile, fix, and rerun without looping forever.'));
+    'Jade runs a full ten-phase pipeline on every model turn. A session keeps its workspace and transcript across follow-ups; each turn is capped by the configured limit so the agent can inspect, edit, compile, fix, and rerun without looping forever.'));
 
   const loop = el('div', 'how-grid');
   PHASES.forEach((phase, index) => {
@@ -1164,7 +1232,8 @@ function showHowItWorks() {
     ['Tool registration', 'Twelve built-ins are registered in a ToolRegistry. Additional ToolProvider implementations are discovered at startup with Java ServiceLoader from META-INF/services.'],
     ['Skill discovery', 'At startup Jade walks skills/**/SKILL.md, parses simple frontmatter, scores the catalog against the task, injects the top two playbooks, and exposes load_skill for on-demand reads.'],
     ['Verification gate', 'After source edits, automatic verification runs Maven/javac, python3 -m py_compile, node --check, or go build through the real workspace. A failure is fed back to DeepSeek; success is the only path to a completed run.'],
-    ['Isolation limits', 'Each run gets a fresh agent-workspaces/run-* directory and all paths go through a workspace jail. Shell commands run with a sanitized environment and, on macOS, a sandbox-exec write jail with network denied by default. Reads and kernel isolation are still shared with the host; this is not a VM.'],
+    ['Sessions', 'A session owns one run id, one workspace, and one transcript. Sending a follow-up appends a user turn to the same transcript and reuses the open SSE stream; New run creates a fresh isolated workspace.'],
+    ['Isolation limits', 'Each session gets its own agent-workspaces/run-* directory and all paths go through a workspace jail. Shell commands run with a sanitized environment and, on macOS, a sandbox-exec write jail with network denied by default. Reads and kernel isolation are still shared with the host; this is not a VM.'],
     ['Transport', 'The local HTTP server exposes a JSON API and an SSE event stream. The browser never receives the API key.']
   ];
   facts.forEach(([title, text]) => {

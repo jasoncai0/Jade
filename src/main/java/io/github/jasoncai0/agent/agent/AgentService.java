@@ -44,6 +44,7 @@ import java.util.stream.Stream;
 public final class AgentService implements AutoCloseable {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private static final int MAX_TASK_CHARS = 20_000;
+    private static final int MAX_MESSAGE_CHARS = 20_000;
     private static final int MAX_RESTORED_SESSIONS = 200;
 
     private final AppConfig config;
@@ -121,37 +122,99 @@ public final class AgentService implements AutoCloseable {
         RunEventLog events = new RunEventLog();
         RunControl control = new RunControl();
         CompletableFuture<RunSnapshot> completion = new CompletableFuture<>();
-        AgentRun run = new AgentRun(id, workspace, state, events, control, completion);
+        AgentRun run = new AgentRun(id, workspace, state, events);
+        if (!run.beginTurn(control, completion)) {
+            activeWorkspaces.remove(workspace.root());
+            throw new IllegalStateException("Could not start agent turn");
+        }
         runs.put(id, run);
         state.setFiles(workspace.listFiles(500, 8));
 
         try {
-            executor.submit(() -> {
-                control.attach(Thread.currentThread());
-                try {
-                    RunSnapshot snapshot = new AgentLoop(
-                            llm, tools, skills, config.agent(), config.llm().maxOutputTokens()
-                    ).run(cleanTask, workspace, state, events, control);
-                    completion.complete(snapshot);
-                } catch (Throwable t) {
-                    if (!state.snapshot().terminal()) {
-                        state.fail(t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage());
-                    }
-                    completion.completeExceptionally(t);
-                    Log.error("agent.executor.failed", t, Map.of("runId", id));
-                } finally {
-                    activeWorkspaces.remove(workspace.root());
-                    events.close();
-                }
-            });
+            executor.submit(() -> executeTurn(run, control, completion, cleanTask, false));
         } catch (RuntimeException e) {
             activeWorkspaces.remove(workspace.root());
             runs.remove(id);
+            run.finishTurn();
             events.close();
             throw e;
         }
         Log.info("agent.run.queued", Map.of("runId", id, "workspace", workspace.root().getFileName().toString()));
         return state.snapshot();
+    }
+
+    /**
+     * Continues a terminal session with another user message. The workspace,
+     * transcript, and event sequence survive; only the per-turn loop resets.
+     */
+    public RunSnapshot followUp(String id, String message) {
+        if (closed) {
+            throw new IllegalStateException("Agent service is shutting down");
+        }
+        String clean = message == null ? "" : message.strip();
+        if (clean.isEmpty()) {
+            throw new IllegalArgumentException("Message must not be blank");
+        }
+        if (clean.length() > MAX_MESSAGE_CHARS) {
+            throw new IllegalArgumentException("Message is too long (max " + MAX_MESSAGE_CHARS + " characters)");
+        }
+        AgentRun run = require(id);
+        if (run.running() || !run.snapshot().terminal()) {
+            throw new IllegalStateException("Session is still running; wait for it to finish");
+        }
+        Path root = run.workspace().root();
+        synchronized (startLock) {
+            if (!activeWorkspaces.add(root)) {
+                throw new IllegalStateException("Workspace is already used by a running agent");
+            }
+        }
+        RunControl control = new RunControl();
+        CompletableFuture<RunSnapshot> completion = new CompletableFuture<>();
+        synchronized (run) {
+            if (!run.beginTurn(control, completion)) {
+                activeWorkspaces.remove(root);
+                throw new IllegalStateException("Session is still running; wait for it to finish");
+            }
+            run.state().beginTurn();
+            run.events().open();
+        }
+        try {
+            executor.submit(() -> executeTurn(run, control, completion, clean, true));
+        } catch (RuntimeException e) {
+            activeWorkspaces.remove(root);
+            run.finishTurn();
+            run.events().close();
+            throw e;
+        }
+        Log.info("agent.turn.queued", Map.of("runId", id, "messageChars", clean.length()));
+        return run.snapshot();
+    }
+
+    private void executeTurn(AgentRun run, RunControl control,
+                             CompletableFuture<RunSnapshot> completion,
+                             String userMessage, boolean continuation) {
+        Workspace workspace = run.workspace();
+        RunState state = run.state();
+        RunEventLog events = run.events();
+        control.attach(Thread.currentThread());
+        try {
+            AgentLoop loop = new AgentLoop(
+                    llm, tools, skills, config.agent(), config.llm().maxOutputTokens());
+            RunSnapshot snapshot = continuation
+                    ? loop.continueSession(userMessage, RunArtifacts.loadMessages(workspace.root()),
+                            workspace, state, events, control)
+                    : loop.run(userMessage, workspace, state, events, control);
+            completion.complete(snapshot);
+        } catch (Throwable t) {
+            if (!state.snapshot().terminal()) {
+                state.fail(t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage());
+            }
+            completion.completeExceptionally(t);
+            Log.error("agent.executor.failed", t, Map.of("runId", run.id()));
+        } finally {
+            run.finishTurn();
+            activeWorkspaces.remove(workspace.root());
+        }
     }
 
     public Optional<AgentRun> find(String id) {
@@ -287,8 +350,7 @@ public final class AgentService implements AutoCloseable {
                 }
                 RunState state = RunState.restore(snapshot);
                 RunEventLog events = RunEventLog.restore(stored.events());
-                AgentRun run = new AgentRun(snapshot.id(), workspace, state, events,
-                        new RunControl(), CompletableFuture.completedFuture(state.snapshot()));
+                AgentRun run = new AgentRun(snapshot.id(), workspace, state, events);
                 runs.put(snapshot.id(), run);
                 restored++;
             } catch (RuntimeException e) {
@@ -332,6 +394,9 @@ public final class AgentService implements AutoCloseable {
 
     @Override
     public void close() {
+        if (closed) {
+            return;
+        }
         closed = true;
         runs.values().forEach(run -> run.control().cancel());
         executor.shutdownNow();
@@ -339,6 +404,9 @@ public final class AgentService implements AutoCloseable {
             executor.awaitTermination(3, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+        for (AgentRun run : runs.values()) {
+            run.events().close();
         }
         Log.info("agent.service.closed", Map.of("runs", runs.size()));
     }

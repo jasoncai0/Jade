@@ -86,17 +86,19 @@ Every model turn executes these ten phases, in order:
 | 09 | Compact | Trim old context inside the character budget |
 | 10 | Checkpoint | Persist transcript, events, and final answer |
 
-The model-turn cap is a separate hard limit: `AGENT_MAX_STEPS=10`. A run may
-choose to finish in fewer turns; it cannot exceed ten model turns by default.
-This is intentional: ten phases describe one turn, while ten turns bound the
-whole task.
+The model-turn cap is a separate hard limit: `AGENT_MAX_STEPS` defaults to 10
+and supports up to 30. A run may choose to finish in fewer turns; it cannot
+exceed the configured number. This is intentional: ten phases describe one
+turn, while the turn cap bounds one user request.
 
-### Session history
+### Session history and follow-ups
 
-Runs are retained on disk and come back after a server restart. The web console
-lists up to the 200 most recent saved sessions, and an old session can still be
-selected to inspect its plan, trace, verification output, files, and final
-answer. The durable files are:
+Sessions are retained on disk and come back after a server restart. The web
+console lists up to the 200 most recent saved sessions, and an old session can
+still be selected to inspect its plan, trace, verification output, files, and
+final answer. A selected terminal session accepts follow-ups in the same
+workspace: type in the composer, send, and the next turn appends to the same
+transcript and event stream. The durable files are:
 
 ```
 agent-workspaces/<name>/
@@ -109,9 +111,11 @@ agent-workspaces/<name>/
 `AgentService` restores terminal sessions at startup and rehydrates each event
 log with its original sequence numbers, so SSE replay works after a restart.
 A session that was still `RUNNING` when the previous process died comes back as
-`FAILED` with an interruption message instead of pretending to be live. Restored
-sessions are read-only history; starting a new task creates a new isolated
-workspace. Delete a workspace directory to remove that session permanently.
+`FAILED` with an interruption message instead of pretending to be live.
+Restored sessions can be continued: sending a follow-up reopens the event log,
+appends a user message to the transcript, and runs another bounded turn in the
+same workspace. `New run` creates a new isolated workspace. Delete a workspace
+directory to remove that session permanently.
 
 ### LLM request trace
 
@@ -258,7 +262,7 @@ test` followed by a source edit cannot silently pass.
 CodingAgentApplication
 ├── CLI (--task / --check / --ping / serve)
 ├── AgentService                  run registry, per-run workspace, virtual threads
-│   └── AgentLoop                 ten phases per turn, max ten turns
+│   └── AgentLoop                 ten phases per turn, bounded turns
 │       ├── DeepSeekClient        OpenAI-compatible tool calling
 │       ├── ToolRegistry          built-ins + ServiceLoader
 │       ├── SkillRegistry         SKILL.md discovery and ranking
@@ -295,6 +299,7 @@ Errors use the HTTP status as `code` and `data: null`.
 | GET | `/api/skills` | discovered skills |
 | GET | `/api/runs` | run snapshots, newest first |
 | POST | `/api/runs` | start `{task, workspace?}`; returns 202 |
+| POST | `/api/runs/{id}/messages` | follow up `{message}` in the same session; returns 202 |
 | GET | `/api/runs/{id}` | one run snapshot |
 | POST | `/api/runs/{id}/cancel` | request cancellation |
 | GET | `/api/runs/{id}/files` | workspace file listing |
@@ -453,8 +458,7 @@ docs/                             architecture and demo script
 - No debugger integration (`jdb`, `pdb`, Node inspector). Debugging means
   reading compiler/runtime output, reproducing the failure, and repairing the
   source.
-- No database or multi-session chat: completed runs are retained as read-only
-  history; a follow-up starts a new isolated session rather than appending to
-  the old transcript.
+- No database. Sessions are files under `agent-workspaces/`; follow-ups append
+  linearly to one transcript. There is no branch, fork, or concurrent-chat model.
 - The live DeepSeek call is not part of the automated suite because it needs a
   user key; the HTTP layer is tested against a local fake endpoint instead.

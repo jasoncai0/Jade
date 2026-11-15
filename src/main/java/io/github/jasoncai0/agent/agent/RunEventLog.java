@@ -71,6 +71,12 @@ public final class RunEventLog {
         notifyAll();
     }
 
+    /** Reopens a restored log when the user continues a saved session. */
+    public synchronized void open() {
+        closed = false;
+        notifyAll();
+    }
+
     public synchronized int size() {
         return events.size();
     }

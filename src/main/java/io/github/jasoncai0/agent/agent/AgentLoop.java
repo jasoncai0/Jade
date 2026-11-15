@@ -57,19 +57,50 @@ public final class AgentLoop {
 
     public RunSnapshot run(String task, Workspace workspace, RunState state,
                            RunEventLog log, RunControl control) {
-        state.markRunning();
+        state.beginTurn();
+        List<Skill> selected = skills.select(task, 2);
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(ChatMessage.system(buildSystemPrompt(workspace, selected)));
+        messages.add(ChatMessage.user(buildInitialUserMessage(task, workspace)));
         Log.info("agent.run.start", Map.of(
                 "runId", state.id(),
                 "workspace", workspace.root().getFileName().toString(),
                 "taskChars", task.length()
         ));
         log.emit("run.started", eventMap("snapshot", state.snapshot()));
+        return runTurn(task, workspace, state, log, control, messages, selected, false);
+    }
 
+    /**
+     * Continues an existing session with a new user message. The previous
+     * conversation is kept, the workspace is reused, and the same event log
+     * gets new events with monotonically increasing sequence numbers.
+     */
+    public RunSnapshot continueSession(String message, List<ChatMessage> history,
+                                      Workspace workspace, RunState state,
+                                      RunEventLog log, RunControl control) {
+        state.beginTurn();
+        List<Skill> selected = skills.select(message, 2);
+        List<ChatMessage> messages = new ArrayList<>(history);
+        if (messages.isEmpty() || messages.get(0).role() != io.github.jasoncai0.agent.llm.Role.SYSTEM) {
+            messages.add(0, ChatMessage.system(buildSystemPrompt(workspace, selected)));
+        }
+        messages.add(ChatMessage.user(message));
+        Log.info("agent.turn.start", Map.of(
+                "runId", state.id(),
+                "workspace", workspace.root().getFileName().toString(),
+                "messageChars", message.length(),
+                "messages", messages.size()
+        ));
+        log.emit("turn.started", eventMap("message", message, "snapshot", state.snapshot()));
+        return runTurn(state.task(), workspace, state, log, control, messages, selected, true);
+    }
+
+    private RunSnapshot runTurn(String task, Workspace workspace, RunState state,
+                                RunEventLog log, RunControl control,
+                                List<ChatMessage> messages, List<Skill> selected,
+                                boolean continuation) {
         ToolContext context = new ToolContext(workspace, settings, skills, state, verifier);
-        List<Skill> selected = skills.select(task, 2);
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(ChatMessage.system(buildSystemPrompt(workspace, selected)));
-        messages.add(ChatMessage.user(buildInitialUserMessage(task, workspace)));
         context.refreshFiles();
 
         try {
@@ -220,7 +251,6 @@ public final class AgentLoop {
             }
             RunSnapshot snapshot = state.snapshot();
             log.emit("run.finished", eventMap("snapshot", snapshot));
-            log.close();
             try {
                 // Persist once more so a restarted process can replay the final
                 // run.finished event, not just the earlier checkpoint.

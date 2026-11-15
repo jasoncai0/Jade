@@ -72,10 +72,15 @@ Press `Start agent`. Watch:
 4. A second tool card shows `compile_code` / `run_code` output.
 5. The verification panel turns green with the exact `python3 -m py_compile` or `go build`
    command (or `node --check` / `javac` for the other examples).
-6. The run ends `SUCCEEDED`; the workspace panel lists `main.py`.
-7. Stop the process, run `./run.sh` again, and reload the page. The left rail
+6. The run ends `SUCCEEDED`; the workspace panel lists `main.go`.
+7. Type a follow-up in the same composer, for example `Change the output to
+   hello-v2, rebuild and run it again.` Click `Send follow-up`. A `you` trace
+   appears, the plan resets for the new turn, and telemetry accumulates across
+   the session.
+8. Stop the process, run `./run.sh` again, and reload the page. The left rail
    still lists the session; select it and the plan, trace, files, and final
-   answer replay from `.agent/`.
+   answer replay from `.agent/`. A restored session can accept a new follow-up;
+   `New run` creates a separate workspace.
 
 Each model call also adds a collapsed `LLM REQUEST` card to the trace. Click
 `request body` to inspect the exact JSON sent to DeepSeek: model, messages,
