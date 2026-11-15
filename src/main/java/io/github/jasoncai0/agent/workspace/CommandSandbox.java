@@ -111,6 +111,12 @@ public final class CommandSandbox {
         env.put("TEMP", tmp.toString());
         env.put("GOCACHE", goCache.toString());
         env.put("GOTMPDIR", tmp.toString());
+        // Spring Boot, Jansi and other JVM children honor Java's temp property,
+        // not TMPDIR. Keep their scratch files inside the writable jail.
+        String javaTmp = "-Djava.io.tmpdir=" + tmp;
+        String existingJavaOptions = env.get("JAVA_TOOL_OPTIONS");
+        env.put("JAVA_TOOL_OPTIONS", existingJavaOptions == null || existingJavaOptions.isBlank()
+                ? javaTmp : existingJavaOptions + " " + javaTmp);
         env.put("AGENT_SANDBOX_ACTIVE", active ? "1" : "0");
         env.put("AGENT_SANDBOX_NETWORK", network ? "1" : "0");
     }

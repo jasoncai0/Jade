@@ -35,4 +35,25 @@ class CommandSandboxTest {
         assertTrue(Files.exists(workspace.resolve("inside.txt")), "workspace writes must be allowed");
         assertFalse(Files.exists(outside), "outside writes must be denied");
     }
+
+    @Test
+    void pointsJavaTempAtWorkspaceScratch() throws Exception {
+        Path executable = Path.of("/usr/bin/sandbox-exec");
+        Assumptions.assumeTrue(Files.isExecutable(executable), "macOS sandbox-exec is unavailable");
+
+        Path workspace = temp.resolve("java-workspace");
+        Files.createDirectories(workspace);
+        CommandSandbox sandbox = CommandSandbox.create(
+                CommandSandbox.Mode.AUTO, false, executable);
+        CommandRunner runner = new CommandRunner(sandbox);
+
+        CommandRunner.CommandResult result = runner.runShell(
+                "printf '%s' \"$JAVA_TOOL_OPTIONS\"", workspace, 10, workspace);
+
+        assertTrue(result.success(), result.combinedOutput(4_000));
+        assertTrue(result.stdout().contains("-Djava.io.tmpdir="),
+                "JVM children must keep temp files inside the jail: " + result.stdout());
+        assertTrue(result.stdout().contains(workspace.toRealPath().toString()),
+                "java.io.tmpdir must point at the workspace: " + result.stdout());
+    }
 }
