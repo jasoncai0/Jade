@@ -250,7 +250,11 @@ still runs with the user's host permissions.
 ## 10. Durable history and SSE
 
 `RunEventLog` writes every event to `EventStore` (`MySqlEventStore` in
-production). `GET /api/runs/{id}/history` reads at most 500 events before a
+production). The MySQL access layer is MyBatis 3.5.19: `SchemaMapper` creates
+the tables, `SessionMapper` reads/writes snapshots, and `EventMapper` handles
+event upserts, pages, and full-payload lookups. SQL is in mapper XML; the store
+opens pooled `SqlSession`s and no longer shares a JDBC connection.
+`GET /api/runs/{id}/history` reads at most 500 events before a
 cursor and returns a compact projection: `llm.request.body` is replaced by a
 2,000-character preview, `tool.start.arguments` is capped at 4,000 characters,
 and `tool.end.output` at 8,000. The UI loads the newest 150 events, then

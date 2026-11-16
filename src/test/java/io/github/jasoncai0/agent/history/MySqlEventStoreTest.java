@@ -1,7 +1,10 @@
 package io.github.jasoncai0.agent.history;
 
 import io.github.jasoncai0.agent.agent.AgentEvent;
+import io.github.jasoncai0.agent.agent.RunSnapshot;
+import io.github.jasoncai0.agent.agent.RunStatus;
 import io.github.jasoncai0.agent.config.MysqlSettings;
+import io.github.jasoncai0.agent.llm.Usage;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
@@ -39,6 +42,8 @@ class MySqlEventStoreTest {
              Statement st = c.createStatement()) {
             st.executeUpdate("DELETE FROM jade_events WHERE run_id='" + RUN_ID + "'");
             st.executeUpdate("DELETE FROM jade_sessions WHERE run_id='" + RUN_ID + "'");
+            st.executeUpdate("DELETE FROM jade_events WHERE run_id='" + RUN_ID + "-import'");
+            st.executeUpdate("DELETE FROM jade_sessions WHERE run_id='" + RUN_ID + "-import'");
         } catch (Exception ignored) {
         }
     }
@@ -75,5 +80,23 @@ class MySqlEventStoreTest {
         AgentEvent compactLlm = page.events().stream().filter(e -> e.type().equals("llm.request")).findFirst().orElseThrow();
         AgentEvent full = store.event(RUN_ID, compactLlm.seq()).orElseThrow();
         assertTrue(((String) full.data().get("body")).contains("deepseek-chat"));
+    }
+
+    @Test
+    void importsSnapshotAndEventsInOneMyBatisBatch() {
+        String runId = RUN_ID + "-import";
+        RunSnapshot snapshot = new RunSnapshot(
+                runId, "import test", "ws-import", RunStatus.SUCCEEDED.name(),
+                "checkpoint", "Checkpoint", 1, 0, List.of(), List.of("src/Main.java"),
+                Usage.ZERO, "done", null, "verified", 1000L, 2000L, ".agent/transcript.json");
+        store.importRun(snapshot, List.of(
+                new AgentEvent(1, 1000, "run.started", Map.of("task", "import test")),
+                new AgentEvent(2, 1001, "run.finished", Map.of("status", "SUCCEEDED"))));
+
+        assertTrue(store.snapshot(runId).isPresent());
+        assertEquals("done", store.snapshot(runId).orElseThrow().finalAnswer());
+        assertEquals(2, store.eventCount(runId));
+        assertEquals(List.of(1L, 2L), store.page(runId, 0, 10, true).events().stream()
+                .map(AgentEvent::seq).toList());
     }
 }

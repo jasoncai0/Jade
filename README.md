@@ -117,10 +117,16 @@ agent-workspaces/<name>/
 ```
 
 Session history is stored in MySQL 8.4 (started by `docker compose up -d`;
-host port `3307`). Startup imports legacy `.agent/events.jsonl` files once,
-then restores snapshots from `jade_sessions`. Live events are appended to
-`jade_events`; the compact projection strips large LLM bodies and tool payloads,
-so loading a long session only fetches a bounded tail. The Live Trace offers
+host port `3307`). The access layer is MyBatis 3.5.19: `SchemaMapper` owns the
+DDL, `SessionMapper` owns session snapshots, and `EventMapper` owns event
+pagination and lookups. SQL lives in mapper XML under
+`src/main/resources/io/github/jasoncai0/agent/history/mapper/`; the store uses
+a pooled `SqlSessionFactory` instead of a shared JDBC connection.
+
+Startup imports legacy `.agent/events.jsonl` files once, then restores snapshots
+from `jade_sessions`. Live events are appended to `jade_events`; the compact
+projection strips large LLM bodies and tool payloads, so loading a long session
+only fetches a bounded tail. The Live Trace offers
 `Load earlier events` for older pages and `Load full request body` for one
 archived request. `AgentService` restores terminal sessions at startup and
 rehydrates each event log with its original sequence numbers, so SSE replay
@@ -486,7 +492,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 65 tests:
+The suite has 66 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -505,7 +511,7 @@ The suite has 65 tests:
   token-budget stop, and an explicit positive turn cap
 - command sandbox write denial and SDK-directory exclusion
 - HTTP API and SSE replay against a real local server and a fake model
-- MySQL event-store pagination, compact LLM bodies, and full-payload lookup
+- MySQL/MyBatis event-store pagination, compact LLM bodies, full-payload lookup, and batch import
   (skipped automatically when the Docker MySQL instance is not running)
 - restart retention: a finished run is reloaded with its events, transcript, and files;
   an interrupted run is restored as `FAILED`

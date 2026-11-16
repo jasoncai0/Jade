@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="io.github.jasoncai0.agent.history.mapper.EventMapper">
+    <insert id="upsert">
+        INSERT INTO jade_events(run_id, seq, ts, event_type, data, compact_data)
+        VALUES (#{runId}, #{seq}, #{ts}, #{eventType}, #{data}, #{compactData})
+        ON DUPLICATE KEY UPDATE ts=VALUES(ts), event_type=VALUES(event_type),
+          data=VALUES(data), compact_data=VALUES(compact_data)
+    </insert>
+
+    <select id="pageFull" resultType="io.github.jasoncai0.agent.history.mapper.EventRow">
+        SELECT seq, ts, event_type AS eventType, data AS payload
+        FROM jade_events
+        WHERE run_id = #{runId} AND seq &lt; #{before}
+        ORDER BY seq DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="pageCompact" resultType="io.github.jasoncai0.agent.history.mapper.EventRow">
+        SELECT seq, ts, event_type AS eventType, compact_data AS payload
+        FROM jade_events
+        WHERE run_id = #{runId} AND seq &lt; #{before}
+        ORDER BY seq DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="find" resultType="io.github.jasoncai0.agent.history.mapper.EventRow">
+        SELECT seq, ts, event_type AS eventType, data AS payload
+        FROM jade_events
+        WHERE run_id = #{runId} AND seq = #{seq}
+    </select>
+
+    <select id="lastSeq" resultType="long">
+        SELECT COALESCE(MAX(seq), 0) FROM jade_events WHERE run_id = #{runId}
+    </select>
+
+    <select id="eventCount" resultType="long">
+        SELECT COUNT(*) FROM jade_events WHERE run_id = #{runId}
+    </select>
+
+    <select id="existsBefore" resultType="java.lang.Integer">
+        SELECT 1 FROM jade_events WHERE run_id = #{runId} AND seq &lt; #{seq} LIMIT 1
+    </select>
+</mapper>

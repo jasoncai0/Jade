@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="io.github.jasoncai0.agent.history.mapper.SessionMapper">
+    <insert id="upsert">
+        INSERT INTO jade_sessions(run_id, snapshot, updated_at)
+        VALUES (#{runId}, #{snapshot}, #{updatedAt})
+        ON DUPLICATE KEY UPDATE snapshot=VALUES(snapshot), updated_at=VALUES(updated_at)
+    </insert>
+
+    <select id="listSnapshots" resultType="string">
+        SELECT snapshot FROM jade_sessions ORDER BY updated_at DESC LIMIT #{limit}
+    </select>
+
+    <select id="findSnapshot" resultType="string">
+        SELECT snapshot FROM jade_sessions WHERE run_id = #{runId}
+    </select>
+
+    <select id="countSessions" resultType="long">
+        SELECT COUNT(*) FROM jade_sessions
+    </select>
+</mapper>
