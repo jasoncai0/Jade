@@ -1697,3 +1697,35 @@ textarea:focus {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.trace-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.trace-order {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel-2);
+}
+.trace-order-button {
+  height: 20px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.trace-order-button:hover { color: var(--text); }
+.trace-order-button.active {
+  background: var(--lime-soft);
+  color: var(--lime);
+}

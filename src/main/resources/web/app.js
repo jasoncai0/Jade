@@ -65,6 +65,7 @@ const state = {
   usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
   verification: null,
   pendingPermission: null,
+  traceOrder: 'asc',
   lastFocused: null
 };
 
@@ -940,7 +941,9 @@ function ensureTimelineReady() {
 function traceEntry(kind, timestamp) {
   ensureTimelineReady();
   const timeline = $('timeline');
-  const stick = timeline.scrollTop + timeline.clientHeight >= timeline.scrollHeight - 80;
+  const stick = state.traceOrder === 'desc'
+    ? timeline.scrollTop <= 80
+    : timeline.scrollTop + timeline.clientHeight >= timeline.scrollHeight - 80;
   const entry = el('div', `trace-entry ${kind}`);
   const dot = el('div', 'trace-dot');
   const top = el('div', 'trace-top');
@@ -949,19 +952,39 @@ function traceEntry(kind, timestamp) {
   const time = el('span', 'trace-time', timeLabel(timestamp));
   top.append(label, time);
   entry.append(dot, top);
-  timeline.appendChild(entry);
+  if (state.traceOrder === 'desc') {
+    timeline.insertBefore(entry, timeline.firstChild);
+  } else {
+    timeline.appendChild(entry);
+  }
   state.timelineCount += 1;
   $('traceCount').textContent = `${state.timelineCount} ${state.timelineCount === 1 ? 'event' : 'events'}`;
-  if (stick) timeline.scrollTop = timeline.scrollHeight;
+  if (stick) timeline.scrollTop = state.traceOrder === 'desc' ? 0 : timeline.scrollHeight;
   return { entry, top };
+}
+
+function setTraceOrder(order) {
+  const next = order === 'desc' ? 'desc' : 'asc';
+  if (state.traceOrder === next) return;
+  state.traceOrder = next;
+  const timeline = $('timeline');
+  const entries = Array.from(timeline.children).filter((node) => node.classList.contains('trace-entry'));
+  entries.reverse().forEach((entry) => timeline.appendChild(entry));
+  $('traceOrderAsc').classList.toggle('active', next === 'asc');
+  $('traceOrderDesc').classList.toggle('active', next === 'desc');
+  $('traceOrderAsc').setAttribute('aria-pressed', String(next === 'asc'));
+  $('traceOrderDesc').setAttribute('aria-pressed', String(next === 'desc'));
+  timeline.scrollTop = next === 'desc' ? 0 : timeline.scrollHeight;
 }
 
 function scrollTimeline(force = false) {
   const timeline = $('timeline');
-  const stick = timeline.scrollTop + timeline.clientHeight >= timeline.scrollHeight - 140;
+  const stick = state.traceOrder === 'desc'
+    ? timeline.scrollTop <= 140
+    : timeline.scrollTop + timeline.clientHeight >= timeline.scrollHeight - 140;
   if (force || stick) {
     requestAnimationFrame(() => {
-      timeline.scrollTop = timeline.scrollHeight;
+      timeline.scrollTop = state.traceOrder === 'desc' ? 0 : timeline.scrollHeight;
     });
   }
 }
@@ -1507,6 +1530,8 @@ function wireEvents() {
   $('startBtn').addEventListener('click', startRun);
   $('cancelBtn').addEventListener('click', cancelRun);
   $('newRunBtn').addEventListener('click', newRun);
+  $('traceOrderAsc').addEventListener('click', () => setTraceOrder('asc'));
+  $('traceOrderDesc').addEventListener('click', () => setTraceOrder('desc'));
   $('howBtn').addEventListener('click', showHowItWorks);
   $('skillsBtn').addEventListener('click', showSkills);
   $('toolsBtn').addEventListener('click', showTools);

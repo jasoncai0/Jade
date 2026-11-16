@@ -155,7 +155,15 @@
             <div class="eyebrow"><span class="eyebrow-line"></span>Live trace</div>
             <p class="card-sub">Model decisions, tool calls, compilation output, and the verification gate.</p>
           </div>
-          <span class="trace-count" id="traceCount">0 events</span>
+          <div class="trace-actions">
+            <div class="trace-order" role="group" aria-label="Trace order">
+              <button class="trace-order-button active" id="traceOrderAsc" type="button"
+                      aria-pressed="true" title="Oldest event first">Oldest</button>
+              <button class="trace-order-button" id="traceOrderDesc" type="button"
+                      aria-pressed="false" title="Newest event first">Newest</button>
+            </div>
+            <span class="trace-count" id="traceCount">0 events</span>
+          </div>
         </div>
         <div class="timeline" id="timeline" aria-live="polite">
           <div class="timeline-empty" id="timelineEmpty">
