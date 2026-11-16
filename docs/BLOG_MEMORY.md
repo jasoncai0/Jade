@@ -38,6 +38,7 @@
 
 | 17 | 2026-11-16 | 命令形状循环绕过 | `javap` 只改 `sed -n '60,80p'`/`'80,100p'`，20 轮无进展护栏前已烧 96 MB events | 完整参数指纹不同；数字变化不归一；无反思请求 | 8 轮注入 reflection 检查点；16 轮停止；`run_command` 形状归一化（数字→`#`），10 次窗口 8 次停止；新增 `reflect` 工具 | 2 |
 | 18 | 2026-11-16 | 长会话历史 | 96 MB / 12,786 事件的失败会话加载卡死；分页后 FAILED 变 RUNNING、token 回跳 | 启动即读全量 events；浏览器从 seq 0 重放全部事件；历史事件改写当前状态 | MySQL 存 snapshot+events；compact 分页 150；完整 body 按 seq 懒取；分页后重放 snapshot；改用已加载事件计数 | 8.3 |
+| 19 | 2026-11-16 | 一次性 CLI | 产物和最终回答都已完成，CLI 仍挂 9 分钟；主线程停在 `RunEventLog.awaitAfter` | 为支持连续会话，`run.finished` 不再关闭事件日志；CLI 只等 `closed()`，不知道当前 run 已终止 | CLI 在已消费完事件且快照 terminal 时退出；补 `goal.review` 输出。连续会话/服务端仍保持日志打开 | 8.1 |
 
 ## 发布记录
 

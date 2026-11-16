@@ -45,6 +45,7 @@ public final class AgentLoop {
     private final PermissionBroker permissionBroker;
     private final PermissionSession permissionSession;
     private final QuestionBroker questionBroker;
+    private final GoalReviewer goalReviewer;
     private final ContextCompactor compactor = new ContextCompactor();
     private final ToolLoopGuard loopGuard = new ToolLoopGuard();
 
@@ -56,20 +57,29 @@ public final class AgentLoop {
     AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
               AgentSettings settings, int maxOutputTokens, Verifier verifier) {
         this(llm, tools, skills, settings, maxOutputTokens, verifier,
-                new PermissionBroker(), new PermissionSession(), new QuestionBroker());
+                new PermissionBroker(), new PermissionSession(), new QuestionBroker(),
+                new LlmGoalReviewer(llm));
     }
 
     AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
               AgentSettings settings, int maxOutputTokens, Verifier verifier,
               PermissionBroker permissionBroker, PermissionSession permissionSession) {
         this(llm, tools, skills, settings, maxOutputTokens, verifier, permissionBroker,
-                permissionSession, new QuestionBroker());
+                permissionSession, new QuestionBroker(), new LlmGoalReviewer(llm));
     }
 
     AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
               AgentSettings settings, int maxOutputTokens, Verifier verifier,
               PermissionBroker permissionBroker, PermissionSession permissionSession,
               QuestionBroker questionBroker) {
+        this(llm, tools, skills, settings, maxOutputTokens, verifier, permissionBroker,
+                permissionSession, questionBroker, new LlmGoalReviewer(llm));
+    }
+
+    AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
+              AgentSettings settings, int maxOutputTokens, Verifier verifier,
+              PermissionBroker permissionBroker, PermissionSession permissionSession,
+              QuestionBroker questionBroker, GoalReviewer goalReviewer) {
         this.llm = llm;
         this.tools = tools;
         this.skills = skills;
@@ -79,6 +89,7 @@ public final class AgentLoop {
         this.permissionBroker = permissionBroker == null ? new PermissionBroker() : permissionBroker;
         this.permissionSession = permissionSession == null ? new PermissionSession() : permissionSession;
         this.questionBroker = questionBroker == null ? new QuestionBroker() : questionBroker;
+        this.goalReviewer = goalReviewer == null ? GoalReviewer.NOOP : goalReviewer;
     }
 
     public RunSnapshot run(String task, Workspace workspace, RunState state,
@@ -86,7 +97,7 @@ public final class AgentLoop {
         state.beginTurn();
         List<Skill> selected = skills.select(task, 2);
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(ChatMessage.system(buildSystemPrompt(workspace, selected)));
+        messages.add(ChatMessage.system(buildSystemPrompt(task, workspace, selected)));
         messages.add(ChatMessage.user(buildInitialUserMessage(task, workspace)));
         Log.info("agent.run.start", Map.of(
                 "runId", state.id(),
@@ -109,7 +120,7 @@ public final class AgentLoop {
         List<Skill> selected = skills.select(message, 2);
         List<ChatMessage> messages = new ArrayList<>(history);
         if (messages.isEmpty() || messages.get(0).role() != io.github.jasoncai0.agent.llm.Role.SYSTEM) {
-            messages.add(0, ChatMessage.system(buildSystemPrompt(workspace, selected)));
+            messages.add(0, ChatMessage.system(buildSystemPrompt(state.task(), workspace, selected)));
         }
         messages.add(ChatMessage.user(message));
         Log.info("agent.turn.start", Map.of(
@@ -138,6 +149,7 @@ public final class AgentLoop {
             int totalToolCalls = 0;
             int noProgressTurns = 0;
             boolean reflectionRequested = false;
+            int goalReviewAttempts = 0;
             int cycle = 1;
             while (true) {
                 if (settings.maxSteps() > 0 && cycle > settings.maxSteps()) {
@@ -320,6 +332,37 @@ public final class AgentLoop {
                     String answer = result.content() == null || result.content().isBlank()
                             ? "Task completed. " + state.verification()
                             : result.content();
+                    if (settings.goalMode()) {
+                        GoalReview review = goalReviewer.review(task, state.plan(), answer,
+                                state.verification(), state.files());
+                        if (review.usage().totalTokens() > 0) {
+                            state.addUsage(review.usage());
+                        }
+                        log.emit("goal.review", eventMap(
+                                "aligned", review.aligned(),
+                                "missing", review.missing(),
+                                "issues", review.issues(),
+                                "answer", answer,
+                                "verification", state.verification(),
+                                "usage", review.usage()
+                        ));
+                        if (!review.aligned()) {
+                            goalReviewAttempts++;
+                            String feedback = goalFeedback(review);
+                            if (goalReviewAttempts >= 3) {
+                                String message = "Goal review rejected the result after 3 attempts: " + feedback;
+                                state.fail(message);
+                                log.emit("run.failed", eventMap("error", message, "goalReview", true));
+                                break;
+                            }
+                            messages.add(ChatMessage.user("GOAL REVIEW FAILED. " + feedback
+                                    + " Continue working and finish with a concise answer that addresses the original task."));
+                            log.emit("goal.rejected", eventMap("attempt", goalReviewAttempts,
+                                    "missing", review.missing(), "issues", review.issues()));
+                            cycle++;
+                            continue;
+                        }
+                    }
                     state.succeed(answer);
                     log.emit("run.succeeded", eventMap("answer", answer, "usage", state.usage()));
                     completed = true;
@@ -521,8 +564,31 @@ public final class AgentLoop {
                 + "then call compile_code or run_code again. Do not claim success until the real toolchain passes.";
     }
 
-    private String buildSystemPrompt(Workspace workspace, List<Skill> selected) {
+    private String goalFeedback(GoalReview review) {
         StringBuilder out = new StringBuilder();
+        if (!review.missing().isEmpty()) {
+            out.append("Missing requirements: ").append(String.join("; ", review.missing())).append(". ");
+        }
+        if (!review.issues().isEmpty()) {
+            out.append("Issues: ").append(String.join("; ", review.issues())).append(". ");
+        }
+        return out.length() == 0 ? "The final answer does not satisfy the original task." : out.toString().trim();
+    }
+
+    private String buildSystemPrompt(String task, Workspace workspace, List<Skill> selected) {
+        StringBuilder out = new StringBuilder();
+        String goalSection = settings.goalMode() ? """
+                ## Goal mode
+                The original task is immutable and is repeated here:
+                %s
+
+                Before your final answer, check the current plan and the original task. Mark every
+                completed plan item with update_plan, and make the final answer map the requested
+                deliverables to concrete evidence (files and commands). The framework runs an
+                independent goal review; if it finds missing requirements, you will get one more
+                chance to fix them.
+
+                """.formatted(task) : "";
         out.append("""
                 You are Jade, a local coding agent. You work on a real machine and your file edits
                 are really written to disk. You must make the artifact compile, run, and be tested.
@@ -558,6 +624,7 @@ public final class AgentLoop {
                 - If an installed skill is relevant, load it with load_skill. Skills are instructions, not tools.
                 - Keep the final answer concise: what changed, the verification command/result, and how to run it.
 
+                %s
                 ## Installed skill catalog
                 %s
 
@@ -569,6 +636,7 @@ public final class AgentLoop {
                 Verify, Compact, Checkpoint. You only see the Model/Tools loop; the framework handles the rest.
                 """.formatted(
                 workspace.root(),
+                goalSection,
                 skills.catalog(),
                 selected.isEmpty() ? "(none pre-selected; use load_skill if needed)"
                         : String.join("\n\n", selected.stream().map(Skill::render).toList())

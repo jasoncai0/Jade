@@ -260,7 +260,7 @@ public final class CodingAgentApplication {
             while (true) {
                 List<AgentEvent> events = run.events().after(last);
                 if (events.isEmpty()) {
-                    if (run.events().closed()) {
+                    if (run.events().closed() || run.snapshot().terminal()) {
                         break;
                     }
                     AgentEvent next = run.events().awaitAfter(last, 1000);
@@ -426,7 +426,7 @@ public final class CodingAgentApplication {
                     agent.commandTimeoutSeconds(),
                     agent.autoVerify(),
                     options.permissionMode() == null ? agent.permissionMode() : options.permissionMode(),
-                    agent.tokenBudget());
+                    agent.tokenBudget(), agent.goalMode());
         }
         ServerSettings server = config.server();
         if (options.port() != null || options.host() != null) {

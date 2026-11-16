@@ -20,7 +20,7 @@ const EVENT_TYPES = [
   'run.started', 'turn.started', 'phase', 'llm.request', 'assistant', 'tool.start', 'tool.end', 'usage', 'plan',
   'workspace', 'verification', 'compaction', 'permission.request', 'permission.resolved',
   'question.request', 'question.resolved',
-  'loop.detected', 'budget.exceeded', 'reflection.requested', 'reflection.recorded',
+  'loop.detected', 'budget.exceeded', 'reflection.requested', 'reflection.recorded', 'goal.review',
   'run.succeeded', 'run.failed',
   'run.cancelled', 'run.max_steps', 'run.finished'
 ];
@@ -871,6 +871,10 @@ function handleEvent(type, data, timestamp, seq = 0) {
       addQuestionResolved(data, timestamp);
       break;
 
+    case 'goal.review':
+      addGoalReview(data, timestamp);
+      break;
+
     case 'run.succeeded':
       setRunStatus('SUCCEEDED');
       break;
@@ -1490,6 +1494,23 @@ function addReflection(data, timestamp, recorded) {
   entry.appendChild(note);
   if (data.message || data.arguments) {
     entry.appendChild(el('pre', 'reflection-body', data.arguments || data.message));
+  }
+  scrollTimeline();
+}
+
+function addGoalReview(data, timestamp) {
+  const { entry } = traceEntry('system', timestamp);
+  const note = el('div', 'system-note goal-review');
+  note.append(
+    el('span', 'system-key', data.aligned ? 'goal review passed · ' : 'goal review rejected · '),
+    document.createTextNode(data.aligned ? 'final answer matches the original task' : 'missing requirements were sent back to the model')
+  );
+  entry.appendChild(note);
+  const details = [];
+  if (Array.isArray(data.missing)) details.push(...data.missing);
+  if (Array.isArray(data.issues)) details.push(...data.issues);
+  if (!data.aligned && details.length) {
+    entry.appendChild(el('pre', 'reflection-body', details.join('\n')));
   }
   scrollTimeline();
 }

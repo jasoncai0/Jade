@@ -57,6 +57,20 @@ public final class ConsoleRenderer {
                     text(data.get("decision")), text(data.get("scope")));
             case "compaction" -> out.printf("[compact] %s -> %s chars, removed %s messages%n",
                     text(data.get("beforeChars")), text(data.get("afterChars")), text(data.get("removed")));
+            case "goal.review" -> {
+                boolean aligned = Boolean.TRUE.equals(data.get("aligned"));
+                out.printf("%n[goal] %s%n", aligned ? "PASS: final answer aligns with the original task" : "REJECT: final answer does not align");
+                Object missing = data.get("missing");
+                Object issues = data.get("issues");
+                if (!aligned) {
+                    if (missing != null && !String.valueOf(missing).isBlank() && !String.valueOf(missing).equals("[]")) {
+                        out.println("  missing: " + oneLine(String.valueOf(missing), 1000));
+                    }
+                    if (issues != null && !String.valueOf(issues).isBlank() && !String.valueOf(issues).equals("[]")) {
+                        out.println("  issues:  " + oneLine(String.valueOf(issues), 1000));
+                    }
+                }
+            }
             case "run.failed" -> out.printf("%n[run failed] %s%n", text(data.get("error")));
             case "run.cancelled" -> out.printf("%n[run cancelled]%n");
             case "run.max_steps" -> out.printf("%n[run stopped] %s%n", text(data.get("message")));

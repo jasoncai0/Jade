@@ -9,7 +9,8 @@ public record AgentSettings(
         int commandTimeoutSeconds,
         boolean autoVerify,
         PermissionMode permissionMode,
-        long tokenBudget
+        long tokenBudget,
+        boolean goalMode
 ) {
     /** 0 means unlimited; positive values remain an optional explicit cap. */
     public static final int HARD_MAX_STEPS = 10_000;
@@ -20,14 +21,22 @@ public record AgentSettings(
     public AgentSettings(int maxSteps, int maxToolCallsPerStep, int contextCharBudget,
                          int commandTimeoutSeconds, boolean autoVerify) {
         this(maxSteps, maxToolCallsPerStep, contextCharBudget, commandTimeoutSeconds, autoVerify,
-                PermissionMode.BYPASS, 0);
+                PermissionMode.BYPASS, 0, false);
     }
 
     /** Compatibility constructor for permission-aware tests; no token budget. */
     public AgentSettings(int maxSteps, int maxToolCallsPerStep, int contextCharBudget,
                          int commandTimeoutSeconds, boolean autoVerify, PermissionMode permissionMode) {
         this(maxSteps, maxToolCallsPerStep, contextCharBudget, commandTimeoutSeconds, autoVerify,
-                permissionMode, 0);
+                permissionMode, 0, false);
+    }
+
+    /** Compatibility constructor for token-budget tests; goal mode is opt-in. */
+    public AgentSettings(int maxSteps, int maxToolCallsPerStep, int contextCharBudget,
+                         int commandTimeoutSeconds, boolean autoVerify,
+                         PermissionMode permissionMode, long tokenBudget) {
+        this(maxSteps, maxToolCallsPerStep, contextCharBudget, commandTimeoutSeconds, autoVerify,
+                permissionMode, tokenBudget, false);
     }
 
     public AgentSettings {

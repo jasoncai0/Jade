@@ -132,6 +132,18 @@ appends a user message to the transcript, and runs another bounded turn in the
 same workspace. `New run` creates a new isolated workspace. Delete a workspace
 directory to remove that session permanently.
 
+
+### Goal mode
+
+Goal mode is enabled by default (`AGENT_GOAL_MODE=true`). The original task is
+pinned in the system prompt, and the plan stays visible through `update_plan`.
+Before a run can become `SUCCEEDED`, an independent, tool-free review call
+compares the final answer, plan, file list, and verification result with the
+original task. A rejection is fed back with the missing requirements and the
+model gets another attempt; three rejections end the run as `FAILED`. Disable
+it with `AGENT_GOAL_MODE=false` for experiments that do not need the extra
+review call. This costs one extra model request per successful completion.
+
 ### Permission checks
 
 Tool calls are authorized before they execute. The default `balanced` mode
@@ -460,6 +472,7 @@ Environment variables take precedence over `.env`:
 | `AGENT_CONTEXT_CHAR_BUDGET` | `120000` | compaction budget |
 | `AGENT_COMMAND_TIMEOUT_SECONDS` | `120` | default command timeout |
 | `AGENT_AUTO_VERIFY` | `true` | compile gate before final answer |
+| `AGENT_GOAL_MODE` | `true` | independent goal review before success |
 | `AGENT_SANDBOX` | `off` | `off` (default local execution), `auto`, or `required`; macOS write jail |
 | `AGENT_SANDBOX_NETWORK` | `false` | allow network inside the sandbox |
 | `AGENT_HOST` | `127.0.0.1` | HTTP bind address |
@@ -473,12 +486,13 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 62 tests:
+The suite has 65 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
 - tool registration, duplicate rejection, `ServiceLoader` discovery
 - context compaction without orphaned tool messages
+- goal review JSON parsing and rejection feedback before success
 - DeepSeek request shape, JSON mode, strict tools, beta routing, and 401 behavior
   against a local mock HTTP server
 - language detection and aliases; real Python `py_compile`, JavaScript

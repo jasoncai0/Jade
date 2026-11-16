@@ -205,6 +205,17 @@ It drops oldest groups until the character budget is met. If a group is still
 too large, long content is truncated. It never leaves a tool result without its
 assistant call, because DeepSeek rejects orphaned tool messages.
 
+
+## 7.1 Goal review
+
+Goal mode pins the original task in the system prompt. The plan remains a
+mutable checklist (`update_plan`), while `LlmGoalReviewer` performs one
+read-only, tool-free model call before success. It receives the original task,
+plan, file list, verification summary, and final answer, and returns strict JSON
+`{aligned, missing, issues}`. A rejection appends feedback as a user message and
+allows another attempt; three rejections set `FAILED`. The review call is never
+allowed to modify the workspace, and it is skipped when `AGENT_GOAL_MODE=false`.
+
 ## 8. Ask user gate
 
 `ask_user` is a blocking decision tool. It creates a `QuestionRequest`, sets
@@ -287,6 +298,8 @@ Key events:
 | `plan` / `workspace` | `plan` / `files` |
 | `verification` | `ok`, `skipped`, `summary`, `command`, `output`, `durationMs`, `step` |
 | `compaction` | `removed`, `beforeChars`, `afterChars` |
+| `goal.review` | `aligned`, `missing`, `issues`, `usage` |
+| `goal.rejected` | `attempt`, `missing`, `issues` |
 | `reflection.requested` | `message`, `noProgressTurns`, `threshold`, `usage` |
 | `reflection.recorded` | `step`, `arguments`, `usage` |
 | `permission.request` | `id`, `runId`, `tool`, `kind`, `risk`, `summary`, `detail`, `target`, `options`, `createdAt`, `expiresAt` |
