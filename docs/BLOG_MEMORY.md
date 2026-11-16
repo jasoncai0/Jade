@@ -12,7 +12,7 @@
 | 线上地址 | https://www.jasoncai.site/posts/coding-agent-pitfalls.html |
 | 博客源码 | `~/Documents/deepseek-harness/default-workspace/blog/content/posts/coding-agent-pitfalls/` |
 | 标签 | `harness`, `codegen`, `architecture` |
-| 发布状态 | 已发布（2026-11-16 17:43） |
+| 发布状态 | 已发布（2026-11-16 18:29） |
 | 项目复盘 | `docs/RETROSPECTIVE.md` |
 
 ## 踩坑账本
@@ -36,7 +36,7 @@
 | 15 | 2026-11-16 | 长任务轮次 | 10/30 轮上限会截断已经完成的长任务，也会把“没写完最终回答”误判成失败 | 用固定模型轮数当唯一护栏，无法区分正常长任务和失控循环 | 默认 `AGENT_MAX_STEPS=0` 不限制轮数；累计 token 预算默认 0（可选，正数才硬停）和同名同参数连续 4 次的 `ToolLoopGuard` 兜底；正数上限保留 | 2 |
 | 16 | 2026-11-16 | 长任务失控 | 取消默认预算后，旧会话连续 15 分钟、641 步翻 `javap` 字节码；96 MB events；Jade 被 SIGKILL | 重复检测只比完整参数，`sed -n 60,80`/`80,100` 每轮不同；token 预算为 0；没有“无文件变化”判据 | 增加 20 轮无进展护栏：文件列表未变且无新验证即 `LOOP_DETECTED`；不恢复 token 预算 | 2 |
 
-| 17 | 2026-11-16 | 命令形状循环绕过 | `javap` 只改 `sed -n '60,80p'`/`'80,100p'`，20 轮无进展护栏前已烧 96 MB events | 完整参数指纹不同；数字变化不归一；无反思请求 | 8 轮注入 reflection 检查点；16 轮停止；`run_command` 形状归一化（数字→`#`），10 次窗口 8 次停止；新增 `reflect` 工具 | 2 |
+| 17 | 2026-11-16 | 命令形状循环绕过 | `javap` 只改 `sed -n '60,80p'`/`'80,100p'`，20 轮无进展护栏前已烧 96 MB events | 完整参数指纹不同；数字变化不归一；无反思请求 | 8 轮注入 reflection 检查点；16 轮停止；`run_command` 形状归一化（数字→`#`），10 次窗口 8 次停止；新增 `reflect` 工具 | 2.1 |
 | 18 | 2026-11-16 | 长会话历史 | 96 MB / 12,786 事件的失败会话加载卡死；分页后 FAILED 变 RUNNING、token 回跳 | 启动即读全量 events；浏览器从 seq 0 重放全部事件；历史事件改写当前状态 | MySQL 存 snapshot+events；compact 分页 150；完整 body 按 seq 懒取；分页后重放 snapshot；改用已加载事件计数 | 8.3 |
 | 19 | 2026-11-16 | 一次性 CLI | 产物和最终回答都已完成，CLI 仍挂 9 分钟；主线程停在 `RunEventLog.awaitAfter` | 为支持连续会话，`run.finished` 不再关闭事件日志；CLI 只等 `closed()`，不知道当前 run 已终止 | CLI 在已消费完事件且快照 terminal 时退出；补 `goal.review` 输出。连续会话/服务端仍保持日志打开 | 8.1 |
 | 20 | 2026-11-16 | 上下文压缩 | 超预算但只剩三组时，截断结果被丢弃；旧对话被硬删，模型重复劳动 | `compacted` 只看 `removed > 0`；无 token 预算、无 pinned memory、无工具输出微压缩、无模型摘要 | token+字符双预算；system/首任务/最新用户组钉住；tool result 头尾压缩；旧组经无工具模型摘要回插；摘要失败退化说明；补截断生效测试 | 8.4 |
@@ -57,6 +57,7 @@
 
 | 2026-11-16 16:24 | 补充长会话历史分页坑 | 线上 200，8.3 节可见 | blog commit `0ef478c`；基线 `b3aa363`；备份 `/home/ubuntu/backups/blog-20261116-162416` |
 | 2026-11-16 17:43 | 补充上下文压缩管线 | 线上 200，8.4 节可见 | blog commit `9e8056d`；基线更新；备份 `/home/ubuntu/backups/blog-20261116-174350` |
+| 2026-11-16 18:29 | 补充反思机制、循环护栏与一次性 CLI 坑 | 线上 200，2.1 节与图可见 | blog commit `d63bcfe`；基线更新；备份 `/home/ubuntu/backups/blog-20261116-182936` |
 
 ## 待办
 
