@@ -9,6 +9,9 @@ import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.llm.ToolCall;
 import io.github.jasoncai0.agent.llm.Usage;
 import io.github.jasoncai0.agent.permission.PermissionMode;
+import io.github.jasoncai0.agent.permission.PermissionSession;
+import io.github.jasoncai0.agent.question.QuestionBroker;
+import io.github.jasoncai0.agent.question.QuestionRequest;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.tool.builtin.BuiltInTools;
 import io.github.jasoncai0.agent.workspace.Workspace;
@@ -224,6 +227,51 @@ class AgentLoopTest {
 
         assertEquals("MAX_STEPS", snapshot.status());
         assertEquals(2, snapshot.step());
+    }
+
+    @Test
+    void asksTheUserAndContinuesWithTheAnswer() throws Exception {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.script.add(toolResult("ask-1", "ask_user", Map.of(
+                "question", "Which output format?",
+                "mode", "single",
+                "options", List.of("JSON", "CSV"))));
+        llm.script.add(finalResult("Used JSON."));
+
+        Path root = temp.resolve("ws-ask");
+        Files.createDirectories(root.resolve(".agent-build/classes"));
+        Workspace workspace = Workspace.open(root);
+        Path skills = temp.resolve("skills-ask");
+        Files.createDirectories(skills);
+        RunState state = new RunState("run-ask", "task", "ws-ask", 0);
+        RunEventLog events = new RunEventLog();
+        RunControl control = new RunControl();
+        QuestionBroker broker = new QuestionBroker();
+        AgentLoop loop = new AgentLoop(llm, BuiltInTools.registry(), SkillRegistry.load(skills),
+                settings(0, 0), 1024, new Verifier(), new PermissionBroker(),
+                new PermissionSession(), broker);
+
+        Thread responder = Thread.ofVirtual().start(() -> {
+            try {
+                for (int i = 0; i < 100; i++) {
+                    QuestionRequest request = broker.pendingFor("run-ask");
+                    if (request != null) {
+                        broker.resolve(request.id(), List.of("opt-1"), "");
+                        return;
+                    }
+                    Thread.sleep(20);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        RunSnapshot snapshot = loop.run("Choose a format", workspace, state, events, control);
+        responder.join();
+        assertEquals("SUCCEEDED", snapshot.status());
+        assertEquals("Used JSON.", snapshot.finalAnswer());
+        assertTrue(events.snapshot().stream().anyMatch(e -> e.type().equals("question.request")));
+        assertTrue(events.snapshot().stream().anyMatch(e -> e.type().equals("question.resolved")));
+        assertTrue(Files.readString(root.resolve(".agent/questions.jsonl")).contains("opt-1"));
     }
 
     private static AgentSettings settings(int maxSteps, long tokenBudget) {

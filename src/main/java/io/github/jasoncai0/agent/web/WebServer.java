@@ -14,6 +14,8 @@ import io.github.jasoncai0.agent.permission.PermissionDecision;
 import io.github.jasoncai0.agent.permission.PermissionRequest;
 import io.github.jasoncai0.agent.permission.PermissionResult;
 import io.github.jasoncai0.agent.permission.PermissionScope;
+import io.github.jasoncai0.agent.question.QuestionAnswer;
+import io.github.jasoncai0.agent.question.QuestionRequest;
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
 import io.github.jasoncai0.agent.config.ServerSettings;
@@ -187,6 +189,17 @@ public final class WebServer implements AutoCloseable {
             resolvePermission(exchange, id, segments.length > 2 ? segments[2] : null);
             return;
         }
+        if (action.equals("questions") && method.equals("GET")) {
+            QuestionRequest pending = agentService.pendingQuestion(id);
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("pending", pending == null ? List.of() : List.of(pending.publicView()));
+            sendData(exchange, 200, data);
+            return;
+        }
+        if (action.equals("questions") && method.equals("POST")) {
+            resolveQuestion(exchange, id, segments.length > 2 ? segments[2] : null);
+            return;
+        }
         if (action.equals("files") && method.equals("GET")) {
             AgentRun run = agentService.require(id);
             List<Map<String, Object>> files = new ArrayList<>();
@@ -283,6 +296,36 @@ public final class WebServer implements AutoCloseable {
         data.put("decision", decision.name());
         data.put("scope", scope.id());
         data.put("networkAllowed", result.networkAllowed());
+        data.put("run", agentService.require(id).snapshot());
+        sendData(exchange, 200, data);
+    }
+
+
+    private void resolveQuestion(HttpExchange exchange, String id, String requestId) throws IOException {
+        if (requestId == null || requestId.isBlank()) {
+            sendError(exchange, 400, "Question request id is required");
+            return;
+        }
+        JsonNode body = readJson(exchange);
+        if (body == null || !body.isObject()) {
+            sendError(exchange, 400, "JSON body must be an object");
+            return;
+        }
+        List<String> selected = new ArrayList<>();
+        JsonNode selectedNode = body.path("selected");
+        if (selectedNode.isArray()) {
+            for (JsonNode item : selectedNode) {
+                if (item.isTextual() && !item.asText().isBlank()) {
+                    selected.add(item.asText());
+                }
+            }
+        }
+        String text = body.path("text").asText("");
+        QuestionAnswer answer = agentService.resolveQuestion(id, requestId, selected, text);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("requestId", requestId);
+        data.put("selected", answer.selected());
+        data.put("text", answer.text());
         data.put("run", agentService.require(id).snapshot());
         sendData(exchange, 200, data);
     }

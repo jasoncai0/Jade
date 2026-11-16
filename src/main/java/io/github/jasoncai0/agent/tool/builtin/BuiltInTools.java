@@ -23,7 +23,8 @@ public final class BuiltInTools {
                 new RunJavaTool(),
                 new UpdatePlanTool(),
                 new LoadSkillTool(),
-                new ReflectTool()
+                new ReflectTool(),
+                new AskUserTool()
         );
     }
 

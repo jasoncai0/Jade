@@ -205,7 +205,16 @@ It drops oldest groups until the character budget is met. If a group is still
 too large, long content is truncated. It never leaves a tool result without its
 assistant call, because DeepSeek rejects orphaned tool messages.
 
-## 8. Permission gate
+## 8. Ask user gate
+
+`ask_user` is a blocking decision tool. It creates a `QuestionRequest`, sets
+`WAITING_INPUT`, emits `question.request`, and waits up to 30 minutes. The Web
+API resolves the request with selected option ids or free text. The tool returns
+the answer as its result and the turn resumes. Answers are audited in
+`.agent/questions.jsonl`. This is a UX decision point, not an execution
+permission; `PermissionPolicy` auto-allows the tool.
+
+## 9. Permission gate
 
 Before a tool executes, `AgentLoop` calls `PermissionManager.authorize(tool, args)`.
 The manager evaluates `PermissionPolicy` against the session's grants:
@@ -227,7 +236,7 @@ Permission sessions are per run and in-memory: a restart loses session grants.
 The layer is authorization and audit, not a kernel sandbox; an approved command
 still runs with the user's host permissions.
 
-## 8. Event model and SSE
+## 10. Event model and SSE
 
 `RunEventLog` is append-only and sequence-numbered from 1. `RunEvent` carries
 `seq`, `timestamp`, `type`, and a non-null `data` map. The log supports:
@@ -268,6 +277,8 @@ Key events:
 | `reflection.recorded` | `step`, `arguments`, `usage` |
 | `permission.request` | `id`, `runId`, `tool`, `kind`, `risk`, `summary`, `detail`, `target`, `options`, `createdAt`, `expiresAt` |
 | `permission.resolved` | `id`, `decision`, `scope`, `reason` |
+| `question.request` | `id`, `runId`, `question`, `detail`, `mode`, `options`, `createdAt`, `expiresAt` |
+| `question.resolved` | `id`, `requestId`, `selected`, `text`, `timedOut`, `cancelled`, `question` |
 | `run.finished` | final `snapshot` |
 
 Data values are never null; `AgentLoop.eventMap` filters nulls because
@@ -295,7 +306,7 @@ strict, while custom gateways keep their configured path. These are transport
 constraints only: `javac` and the verification gate still decide whether an
 artifact works.
 
-## 9. Web and concurrency
+## 11. Web and concurrency
 
 `WebServer` uses the JDK `HttpServer` with a virtual-thread executor. The API
 and static files share the same listener. Responses use the local backend
@@ -315,7 +326,7 @@ workspace names. It rejects a second active run in the same directory. Each run
 gets a virtual thread; cancellation interrupts the thread and is checked at
 phase, tool, and model-call boundaries.
 
-## 10. Failure behavior
+## 12. Failure behavior
 
 | Failure | Result |
 |---------|--------|
@@ -334,7 +345,7 @@ phase, tool, and model-call boundaries.
 | Session token budget exhausted | `BUDGET_EXCEEDED`, transcript preserved |
 | Artifact write failure | warning; run still returns its snapshot |
 
-## 11. Security boundaries
+## 13. Security boundaries
 
 - `Workspace.resolve` rejects absolute paths, NUL, `..` escapes, and symlinks
   that resolve outside the root.
@@ -353,7 +364,7 @@ phase, tool, and model-call boundaries.
   workspace cannot be mistaken for project source.
 - The web server is unauthenticated and localhost-bound by default.
 
-## 12. Why these choices
+## 14. Why these choices
 
 - **No Spring Boot:** fewer moving parts, one jar, fast startup for a demo.
 - **JDK HttpServer:** no framework dependency; enough for REST and SSE.
@@ -366,7 +377,7 @@ phase, tool, and model-call boundaries.
 - **Verification gate:** the core promise is "compiled and ran", so a model
   sentence is never sufficient evidence.
 
-## 13. Test strategy
+## 15. Test strategy
 
 The suite uses no real API key:
 

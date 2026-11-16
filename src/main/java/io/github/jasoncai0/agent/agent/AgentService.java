@@ -13,6 +13,9 @@ import io.github.jasoncai0.agent.permission.PermissionDecision;
 import io.github.jasoncai0.agent.permission.PermissionRequest;
 import io.github.jasoncai0.agent.permission.PermissionResult;
 import io.github.jasoncai0.agent.permission.PermissionScope;
+import io.github.jasoncai0.agent.question.QuestionAnswer;
+import io.github.jasoncai0.agent.question.QuestionBroker;
+import io.github.jasoncai0.agent.question.QuestionRequest;
 import io.github.jasoncai0.agent.workspace.CommandRunner;
 import io.github.jasoncai0.agent.workspace.CommandSandbox;
 import io.github.jasoncai0.agent.workspace.Workspace;
@@ -204,7 +207,7 @@ public final class AgentService implements AutoCloseable {
         try {
             AgentLoop loop = new AgentLoop(
                     llm, tools, skills, config.agent(), config.llm().maxOutputTokens(),
-                    new Verifier(), run.permissions(), run.permissionSession());
+                    new Verifier(), run.permissions(), run.permissionSession(), run.questions());
             RunSnapshot snapshot = continuation
                     ? loop.continueSession(userMessage, RunArtifacts.loadMessages(workspace.root()),
                             workspace, state, events, control)
@@ -245,6 +248,7 @@ public final class AgentService implements AutoCloseable {
     public RunSnapshot cancel(String id) {
         AgentRun run = require(id);
         run.permissions().cancelAll("run cancelled");
+        run.questions().cancelAll("run cancelled");
         run.control().cancel();
         return run.snapshot();
     }
@@ -269,6 +273,20 @@ public final class AgentService implements AutoCloseable {
 
     public PermissionRequest pendingPermission(String id) {
         return require(id).permissions().pendingFor(id);
+    }
+
+    public QuestionRequest pendingQuestion(String id) {
+        return require(id).questions().pendingFor(id);
+    }
+
+    public QuestionAnswer resolveQuestion(String id, String requestId,
+                                          List<String> selected, String text) {
+        AgentRun run = require(id);
+        QuestionAnswer result = run.questions().resolve(requestId, selected, text);
+        if (result == null) {
+            throw new IllegalStateException("No pending question " + requestId + " for " + id);
+        }
+        return result;
     }
 
     public PermissionResult resolvePermission(String id, String requestId,
@@ -430,6 +448,7 @@ public final class AgentService implements AutoCloseable {
         }
         for (AgentRun run : runs.values()) {
             run.permissions().close();
+            run.questions().close();
             run.events().close();
         }
         Log.info("agent.service.closed", Map.of("runs", runs.size()));

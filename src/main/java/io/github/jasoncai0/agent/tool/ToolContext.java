@@ -1,9 +1,12 @@
 package io.github.jasoncai0.agent.tool;
 
 import io.github.jasoncai0.agent.agent.PlanItem;
+import io.github.jasoncai0.agent.agent.RunControl;
+import io.github.jasoncai0.agent.agent.RunEventLog;
 import io.github.jasoncai0.agent.agent.RunState;
 import io.github.jasoncai0.agent.agent.Verifier;
 import io.github.jasoncai0.agent.config.AgentSettings;
+import io.github.jasoncai0.agent.question.QuestionBroker;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.workspace.Workspace;
 
@@ -18,6 +21,10 @@ public final class ToolContext {
     private final SkillRegistry skills;
     private final RunState state;
     private final Verifier verifier;
+    private final String runId;
+    private final RunEventLog events;
+    private final QuestionBroker questions;
+    private final RunControl control;
     private final AtomicBoolean dirty = new AtomicBoolean();
     private final AtomicBoolean touched = new AtomicBoolean();
     private final AtomicBoolean verified = new AtomicBoolean();
@@ -26,11 +33,21 @@ public final class ToolContext {
 
     public ToolContext(Workspace workspace, AgentSettings settings, SkillRegistry skills,
                        RunState state, Verifier verifier) {
+        this(workspace, settings, skills, state, verifier, null, null, null, null);
+    }
+
+    public ToolContext(Workspace workspace, AgentSettings settings, SkillRegistry skills,
+                       RunState state, Verifier verifier, String runId, RunEventLog events,
+                       QuestionBroker questions, RunControl control) {
         this.workspace = workspace;
         this.settings = settings;
         this.skills = skills;
         this.state = state;
         this.verifier = verifier;
+        this.runId = runId;
+        this.events = events;
+        this.questions = questions;
+        this.control = control;
     }
 
     public Workspace workspace() {
@@ -51,6 +68,22 @@ public final class ToolContext {
 
     public Verifier verifier() {
         return verifier;
+    }
+
+    public String runId() {
+        return runId;
+    }
+
+    public RunEventLog events() {
+        return events;
+    }
+
+    public QuestionBroker questions() {
+        return questions;
+    }
+
+    public RunControl control() {
+        return control;
     }
 
     public void setNetworkAllowed(boolean allowed) {

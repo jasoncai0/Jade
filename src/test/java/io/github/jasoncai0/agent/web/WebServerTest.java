@@ -204,6 +204,62 @@ class WebServerTest {
         }
     }
 
+
+    @Test
+    void questionApiAnswersADecision() throws Exception {
+        Path root = temp.resolve("question-app");
+        Path skills = root.resolve("skills");
+        Files.createDirectories(skills);
+        AppConfig config = new AppConfig(
+                root,
+                skills,
+                root.resolve("runs"),
+                new LlmSettings("sk-test", "http://127.0.0.1:1", "deepseek-chat", 5, 1024),
+                new AgentSettings(3, 3, 20_000, 30, true, PermissionMode.BYPASS),
+                new ServerSettings("127.0.0.1", 0)
+        );
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.script.add(new ChatResult(null, null,
+                List.of(new ToolCall("call-question", "ask_user", JSON.writeValueAsString(Map.of(
+                        "question", "Which format?",
+                        "mode", "single",
+                        "options", List.of("JSON", "CSV"))))),
+                "tool_calls", new Usage(10, 5, 15)));
+        llm.script.add(new ChatResult("Used CSV.", null, List.of(), "stop", new Usage(12, 4, 16)));
+
+        AgentService service = new AgentService(config, llm);
+        WebServer server = new WebServer(service, config.server());
+        try {
+            server.start();
+            String base = server.url();
+            HttpResponse<String> created = post(base + "/api/runs", "{\"task\":\"Choose a format\"}");
+            assertEquals(202, created.statusCode());
+            String runId = JSON.readTree(created.body()).path("data").path("run").path("id").asText();
+
+            JsonNode pending = JSON.readTree(get(base + "/api/runs/" + runId + "/questions").body());
+            for (int i = 0; i < 100 && pending.path("data").path("pending").isEmpty(); i++) {
+                Thread.sleep(25);
+                pending = JSON.readTree(get(base + "/api/runs/" + runId + "/questions").body());
+            }
+            assertTrue(pending.path("data").path("pending").size() > 0, pending.toString());
+            JsonNode request = pending.path("data").path("pending").get(0);
+            assertEquals("single", request.path("mode").asText());
+            assertEquals("WAITING_INPUT", service.require(runId).snapshot().status());
+
+            HttpResponse<String> resolved = post(
+                    base + "/api/runs/" + runId + "/questions/" + request.path("id").asText(),
+                    "{\"selected\":[\"opt-2\"],\"text\":\"\"}");
+            assertEquals(200, resolved.statusCode(), resolved.body());
+            assertEquals("SUCCEEDED", service.await(runId, Duration.ofSeconds(20)).status());
+            assertEquals("Used CSV.", service.require(runId).snapshot().finalAnswer());
+            assertTrue(Files.isRegularFile(root.resolve("runs").resolve(service.require(runId).state().workspace())
+                    .resolve(".agent/questions.jsonl")));
+        } finally {
+            server.close();
+            service.close();
+        }
+    }
+
     private static int countOccurrences(String value, String needle) {
         int count = 0;
         int index = 0;

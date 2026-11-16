@@ -19,6 +19,7 @@ const PHASE_DETAIL = Object.fromEntries(PHASES.map((phase) => [phase.id, phase.d
 const EVENT_TYPES = [
   'run.started', 'turn.started', 'phase', 'llm.request', 'assistant', 'tool.start', 'tool.end', 'usage', 'plan',
   'workspace', 'verification', 'compaction', 'permission.request', 'permission.resolved',
+  'question.request', 'question.resolved',
   'loop.detected', 'budget.exceeded', 'reflection.requested', 'reflection.recorded',
   'run.succeeded', 'run.failed',
   'run.cancelled', 'run.max_steps', 'run.finished'
@@ -29,6 +30,7 @@ const STATUS_TEXT = {
   QUEUED: 'queued',
   RUNNING: 'running',
   WAITING_APPROVAL: 'waiting for approval',
+  WAITING_INPUT: 'needs your input',
   SUCCEEDED: 'succeeded',
   FAILED: 'failed',
   CANCELLED: 'cancelled',
@@ -65,6 +67,7 @@ const state = {
   usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
   verification: null,
   pendingPermission: null,
+  pendingQuestion: null,
   traceOrder: 'asc',
   lastFocused: null
 };
@@ -108,7 +111,8 @@ function isTerminal(status) {
 function syncStartButton() {
   const keyReady = Boolean(state.config && state.config.apiKeyConfigured);
   const status = normalizeStatus(state.status);
-  const busy = Boolean(state.selectedId) && (status === 'RUNNING' || status === 'QUEUED' || status === 'WAITING_APPROVAL');
+  const busy = Boolean(state.selectedId) && (status === 'RUNNING' || status === 'QUEUED'
+    || status === 'WAITING_APPROVAL' || status === 'WAITING_INPUT');
   $('startBtn').disabled = state.starting || !keyReady || busy;
   if (!state.starting) {
     const label = $('startBtn').querySelector('span');
@@ -250,6 +254,7 @@ function showEmpty() {
   renderVerificationPending();
   $('artifactLine').classList.add('hidden');
   state.status = 'IDLE';
+  hideQuestionCard();
   syncStartButton();
 }
 
@@ -327,6 +332,7 @@ async function selectRun(id) {
     connect(id, 0);
     loadFiles();
     loadPendingPermission(id);
+    loadPendingQuestion(id);
     syncStartButton();
   } catch (error) {
     if (token !== state.selectionToken) return;
@@ -385,7 +391,8 @@ function setRunStatus(status) {
   const badge = $('runStatus');
   badge.className = `status-badge ${statusClass(normalized)}`;
   $('runStatusText').textContent = STATUS_TEXT[normalized] || normalized.toLowerCase();
-  const active = normalized === 'RUNNING' || normalized === 'QUEUED' || normalized === 'WAITING_APPROVAL';
+  const active = normalized === 'RUNNING' || normalized === 'QUEUED'
+    || normalized === 'WAITING_APPROVAL' || normalized === 'WAITING_INPUT';
   $('cancelBtn').hidden = !active;
   $('telemetryLive').classList.toggle('on', normalized === 'RUNNING');
   if (normalized === 'RUNNING') {
@@ -748,6 +755,15 @@ function handleEvent(type, data, timestamp) {
       addPermissionResolved(data, timestamp);
       break;
 
+    case 'question.request':
+      showQuestionCard(data);
+      break;
+
+    case 'question.resolved':
+      hideQuestionCard();
+      addQuestionResolved(data, timestamp);
+      break;
+
     case 'run.succeeded':
       setRunStatus('SUCCEEDED');
       break;
@@ -784,6 +800,7 @@ function handleEvent(type, data, timestamp) {
 }
 
 function beginFollowUpTurn(data, timestamp) {
+  hideQuestionCard();
   state.terminal = false;
   state.finishRendered = false;
   state.visited.clear();
@@ -895,6 +912,128 @@ async function loadPendingPermission(id) {
   }
 }
 
+
+function questionValue(data, key) {
+  const value = data && data[key];
+  return value === undefined || value === null ? '' : String(value);
+}
+
+function showQuestionCard(data) {
+  hideQuestionCard();
+  state.pendingQuestion = data;
+  state.status = 'WAITING_INPUT';
+  setRunStatus('WAITING_INPUT');
+  const mode = questionValue(data, 'mode') || 'single';
+  const card = el('div', 'permission-card question-card');
+  card.id = 'questionCard';
+  card.setAttribute('role', 'dialog');
+  card.setAttribute('aria-live', 'assertive');
+  const head = el('div', 'permission-head');
+  head.append(el('span', 'permission-eyebrow', 'DECISION NEEDED'));
+  head.append(el('span', 'permission-risk medium', mode.toUpperCase()));
+  card.appendChild(head);
+  card.appendChild(el('h4', null, questionValue(data, 'question')));
+  const detail = questionValue(data, 'detail');
+  if (detail) {
+    card.appendChild(el('p', 'question-detail', detail));
+  }
+  const options = Array.isArray(data.options) ? data.options : [];
+  const body = el('div', 'question-options');
+  if (mode === 'text') {
+    const input = el('textarea', 'question-input');
+    input.id = 'questionText';
+    input.rows = 4;
+    input.placeholder = 'Type your decision…';
+    body.appendChild(input);
+  } else {
+    for (const option of options) {
+      const label = el('label', 'question-option');
+      const input = el('input');
+      input.type = mode === 'multiple' ? 'checkbox' : 'radio';
+      input.name = 'jadeQuestion';
+      input.value = questionValue(option, 'id');
+      const text = el('span', null, questionValue(option, 'label'));
+      label.append(input, text);
+      body.appendChild(label);
+    }
+  }
+  card.appendChild(body);
+  const actions = el('div', 'permission-actions');
+  const submit = el('button', 'permission-btn primary', 'Submit decision');
+  submit.type = 'button';
+  submit.addEventListener('click', () => respondQuestion(mode));
+  actions.appendChild(submit);
+  card.appendChild(actions);
+  document.body.appendChild(card);
+  syncStartButton();
+}
+
+function hideQuestionCard() {
+  const card = $('questionCard');
+  if (card) card.remove();
+  state.pendingQuestion = null;
+}
+
+async function respondQuestion(mode) {
+  const request = state.pendingQuestion;
+  const runId = state.selectedId;
+  const card = $('questionCard');
+  if (!request || !runId || !card) return;
+  const selected = Array.from(card.querySelectorAll('input:checked')).map((input) => input.value);
+  const text = card.querySelector('#questionText')?.value.trim() || '';
+  if (mode === 'text' && !text) {
+    toast('Type an answer before submitting.', true);
+    return;
+  }
+  if (mode !== 'text' && selected.length === 0) {
+    toast('Select at least one option.', true);
+    return;
+  }
+  card.querySelectorAll('button, input, textarea').forEach((node) => { node.disabled = true; });
+  try {
+    await api(`/api/runs/${encodeURIComponent(runId)}/questions/${encodeURIComponent(request.id)}`, {
+      method: 'POST',
+      body: JSON.stringify({ selected, text })
+    });
+    hideQuestionCard();
+    setRunStatus('RUNNING');
+    toast('Decision sent. The agent is continuing.');
+  } catch (error) {
+    card.querySelectorAll('button, input, textarea').forEach((node) => { node.disabled = false; });
+    toast(error.message, true);
+  }
+}
+
+async function loadPendingQuestion(id) {
+  try {
+    const data = await api(`/api/runs/${encodeURIComponent(id)}/questions`);
+    const pending = Array.isArray(data.pending) ? data.pending[0] : null;
+    if (pending && id === state.selectedId) {
+      showQuestionCard(pending);
+    } else {
+      hideQuestionCard();
+    }
+  } catch (error) {
+    // A restored session has no pending requests; ignore.
+  }
+}
+
+function addQuestionResolved(data, timestamp) {
+  const entry = traceEntry('question', timestamp);
+  const body = el('div', 'question-resolved');
+  const selected = Array.isArray(data.selected) ? data.selected : [];
+  const text = questionValue(data, 'text');
+  if (text) {
+    body.textContent = `answer: ${text}`;
+  } else if (selected.length > 0) {
+    body.textContent = `selected: ${selected.join(', ')}`;
+  } else {
+    body.textContent = data.timedOut ? 'no answer (timed out)' : 'no answer';
+  }
+  entry.appendChild(body);
+  scrollTimeline(true);
+}
+
 function addPermissionResolved(data, timestamp) {
   const entry = traceEntry('permission', timestamp);
   const body = el('div', 'permission-resolved');
@@ -904,6 +1043,7 @@ function addPermissionResolved(data, timestamp) {
 }
 
 function finalizeRun(snapshot) {
+  hideQuestionCard();
   applySnapshot(snapshot, false);
   state.terminal = true;
   state.finishedAt = snapshot.finishedAt || Date.now();

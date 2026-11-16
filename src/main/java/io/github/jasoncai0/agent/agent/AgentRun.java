@@ -1,6 +1,7 @@
 package io.github.jasoncai0.agent.agent;
 
 import io.github.jasoncai0.agent.permission.PermissionSession;
+import io.github.jasoncai0.agent.question.QuestionBroker;
 import io.github.jasoncai0.agent.workspace.Workspace;
 
 import java.util.concurrent.CompletableFuture;
@@ -18,6 +19,7 @@ public final class AgentRun {
     private final RunEventLog events;
     private final PermissionBroker permissions = new PermissionBroker();
     private final PermissionSession permissionSession = new PermissionSession();
+    private final QuestionBroker questions = new QuestionBroker();
     private final AtomicBoolean running = new AtomicBoolean();
     private final long createdAt = System.currentTimeMillis();
     private volatile RunControl control = new RunControl();
@@ -74,6 +76,10 @@ public final class AgentRun {
 
     public PermissionSession permissionSession() {
         return permissionSession;
+    }
+
+    public QuestionBroker questions() {
+        return questions;
     }
 
     public RunControl control() {

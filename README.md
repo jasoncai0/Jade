@@ -227,7 +227,7 @@ needed. When a Go workspace has no `go.mod`, Jade creates a minimal module
 
 ### Tools
 
-Thirteen built-in tools are registered at startup:
+Fourteen built-in tools are registered at startup:
 
 | Tool | Purpose |
 |------|---------|
@@ -244,6 +244,7 @@ Thirteen built-in tools are registered at startup:
 | `update_plan` | Publish plan items and statuses |
 | `load_skill` | Load a full skill playbook on demand |
 | `reflect` | Record a structured diagnosis, evidence, attempts, next action, and stop decision |
+| `ask_user` | Ask for a single/multiple choice or free-text decision and wait for the user |
 
 `ToolRegistry` also discovers external tools through `ServiceLoader`. See
 [Extending Jade](#extending-jade).
@@ -328,6 +329,20 @@ failure paths, event model, and design trade-offs. The development retrospective
 is in [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md); the public version is
 [the coding-agent pitfalls article](https://www.jasoncai.site/posts/coding-agent-pitfalls.html).
 
+## Ask user decisions
+
+The model can call `ask_user` when a product choice genuinely needs the user.
+The run enters `WAITING_INPUT`, and the web console shows a fixed decision card
+with radio buttons, checkboxes, or a free-text field. The answer is returned as
+the tool result and the same session continues. Requests expire after 30
+minutes; an unanswered request returns a tool error rather than failing the
+run. Answers are appended to `.agent/questions.jsonl`.
+
+The API is `GET /api/runs/{id}/questions` and
+`POST /api/runs/{id}/questions/{requestId}` with
+`{"selected":["opt-1"],"text":""}`. In a headless CLI, a TTY is required for
+an answer; non-interactive runs cancel the run rather than guess.
+
 ## HTTP API
 
 All JSON responses use:
@@ -349,6 +364,8 @@ Errors use the HTTP status as `code` and `data: null`.
 | POST | `/api/runs/{id}/messages` | follow up `{message}` in the same session; returns 202 |
 | GET | `/api/runs/{id}/permissions` | pending approval requests |
 | POST | `/api/runs/{id}/permissions/{requestId}` | resolve `{decision, scope}` |
+| GET | `/api/runs/{id}/questions` | pending ask_user decision |
+| POST | `/api/runs/{id}/questions/{requestId}` | resolve `{selected:[ids], text}` |
 | GET | `/api/runs/{id}` | one run snapshot |
 | POST | `/api/runs/{id}/cancel` | request cancellation |
 | GET | `/api/runs/{id}/files` | workspace file listing |
@@ -446,7 +463,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 55 tests:
+The suite has 60 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling

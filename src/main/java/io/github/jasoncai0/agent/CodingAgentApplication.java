@@ -11,6 +11,9 @@ import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
 import io.github.jasoncai0.agent.permission.PermissionDecision;
 import io.github.jasoncai0.agent.permission.PermissionScope;
+import io.github.jasoncai0.agent.question.QuestionMode;
+import io.github.jasoncai0.agent.question.QuestionOption;
+import io.github.jasoncai0.agent.question.QuestionRequest;
 import io.github.jasoncai0.agent.config.ServerSettings;
 import io.github.jasoncai0.agent.language.Language;
 import io.github.jasoncai0.agent.llm.ChatMessage;
@@ -29,6 +32,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -251,6 +255,9 @@ public final class CodingAgentApplication {
                     if (event.type().equals("permission.request")) {
                         resolvePermission(service, run, event);
                     }
+                    if (event.type().equals("question.request")) {
+                        resolveQuestion(service, run);
+                    }
                     last = event.seq();
                 }
             }
@@ -300,6 +307,68 @@ public final class CodingAgentApplication {
                 ? PermissionDecision.ALLOW : PermissionDecision.DENY;
         PermissionScope scope = normalized.startsWith("s") ? PermissionScope.SESSION : PermissionScope.ONCE;
         service.resolvePermission(run.id(), requestId, decision, scope, "cli");
+    }
+
+
+    private void resolveQuestion(AgentService service, AgentRun run) {
+        QuestionRequest request = service.pendingQuestion(run.id());
+        if (request == null) {
+            return;
+        }
+        System.out.println();
+        System.out.println("[decision] " + request.question());
+        if (!request.detail().isBlank()) {
+            System.out.println("  " + request.detail());
+        }
+        for (int i = 0; i < request.options().size(); i++) {
+            QuestionOption option = request.options().get(i);
+            System.out.println("  " + (i + 1) + ") " + option.label());
+        }
+        System.out.println(request.mode() == QuestionMode.TEXT
+                ? "  type your answer" : "  choose option number"
+                + (request.mode() == QuestionMode.MULTIPLE ? "s, comma separated" : ""));
+        var console = System.console();
+        if (console == null) {
+            service.cancel(run.id());
+            System.out.println("  cancelled: no interactive terminal");
+            return;
+        }
+        if (request.mode() == QuestionMode.TEXT) {
+            String answer = console.readLine("answer> ");
+            if (answer == null) {
+                service.cancel(run.id());
+                return;
+            }
+            service.resolveQuestion(run.id(), request.id(), List.of(), answer);
+            return;
+        }
+        String answer = console.readLine("choice> ");
+        if (answer == null) {
+            service.cancel(run.id());
+            return;
+        }
+        List<String> selected = new ArrayList<>();
+        for (String part : answer.split("[,\\s]+")) {
+            if (part.isBlank()) continue;
+            try {
+                int index = Integer.parseInt(part.strip()) - 1;
+                if (index >= 0 && index < request.options().size()) {
+                    selected.add(request.options().get(index).id());
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        if (selected.isEmpty()) {
+            System.out.println("  no valid choice; cancelling");
+            service.cancel(run.id());
+            return;
+        }
+        try {
+            service.resolveQuestion(run.id(), request.id(), selected, "");
+        } catch (IllegalArgumentException e) {
+            System.out.println("  invalid choice: " + e.getMessage());
+            service.cancel(run.id());
+        }
     }
 
     private static String readTaskFile(String file) {

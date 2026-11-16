@@ -13,6 +13,7 @@ import io.github.jasoncai0.agent.llm.LlmException;
 import io.github.jasoncai0.agent.llm.ToolCall;
 import io.github.jasoncai0.agent.permission.PermissionResult;
 import io.github.jasoncai0.agent.permission.PermissionSession;
+import io.github.jasoncai0.agent.question.QuestionBroker;
 import io.github.jasoncai0.agent.skill.Skill;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.tool.ToolContext;
@@ -43,6 +44,7 @@ public final class AgentLoop {
     private final Verifier verifier;
     private final PermissionBroker permissionBroker;
     private final PermissionSession permissionSession;
+    private final QuestionBroker questionBroker;
     private final ContextCompactor compactor = new ContextCompactor();
     private final ToolLoopGuard loopGuard = new ToolLoopGuard();
 
@@ -54,12 +56,20 @@ public final class AgentLoop {
     AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
               AgentSettings settings, int maxOutputTokens, Verifier verifier) {
         this(llm, tools, skills, settings, maxOutputTokens, verifier,
-                new PermissionBroker(), new PermissionSession());
+                new PermissionBroker(), new PermissionSession(), new QuestionBroker());
     }
 
     AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
               AgentSettings settings, int maxOutputTokens, Verifier verifier,
               PermissionBroker permissionBroker, PermissionSession permissionSession) {
+        this(llm, tools, skills, settings, maxOutputTokens, verifier, permissionBroker,
+                permissionSession, new QuestionBroker());
+    }
+
+    AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
+              AgentSettings settings, int maxOutputTokens, Verifier verifier,
+              PermissionBroker permissionBroker, PermissionSession permissionSession,
+              QuestionBroker questionBroker) {
         this.llm = llm;
         this.tools = tools;
         this.skills = skills;
@@ -68,6 +78,7 @@ public final class AgentLoop {
         this.verifier = verifier;
         this.permissionBroker = permissionBroker == null ? new PermissionBroker() : permissionBroker;
         this.permissionSession = permissionSession == null ? new PermissionSession() : permissionSession;
+        this.questionBroker = questionBroker == null ? new QuestionBroker() : questionBroker;
     }
 
     public RunSnapshot run(String task, Workspace workspace, RunState state,
@@ -115,7 +126,8 @@ public final class AgentLoop {
                                 RunEventLog log, RunControl control,
                                 List<ChatMessage> messages, List<Skill> selected,
                                 boolean continuation) {
-        ToolContext context = new ToolContext(workspace, settings, skills, state, verifier);
+        ToolContext context = new ToolContext(workspace, settings, skills, state, verifier,
+                state.id(), log, questionBroker, control);
         context.refreshFiles();
         PermissionManager permissions = new PermissionManager(settings.permissionMode(), permissionSession,
                 permissionBroker, state, log, control, workspace);
@@ -537,6 +549,10 @@ public final class AgentLoop {
                 - If you are stuck or repeating the same inspection, call `reflect` with diagnosis,
                   evidence, attempts, one next_action, and should_stop. Do not keep slicing the same file
                   with different line ranges. The framework asks for reflection after repeated no-progress turns.
+                - If a genuine product decision is ambiguous (API shape, data model, tradeoff, destructive
+                  direction), call `ask_user` with one question, optional detail, mode single/multiple/text,
+                  and 2-5 short options. Do not ask for facts you can inspect yourself, and do not use it
+                  merely to confirm routine work.
                 - Before your final answer, the framework automatically verifies the workspace if any source
                   changed. If verification fails, the failure is fed back to you. Fix it, then finish.
                 - If an installed skill is relevant, load it with load_skill. Skills are instructions, not tools.
