@@ -44,6 +44,7 @@
 | 2026-11-15 23:01 | 补充权限审批卡可见性坑 | 线上 200，8.2 节可见 | blog commit `0f8da6d`；备份 `/home/ubuntu/backups/blog-20261115-230109` |
 | 2026-11-15 23:14 | 补充默认沙箱导致本地服务起不来 | 线上 200，4.1 节可见 | blog commit `487138a`；备份 `/home/ubuntu/backups/blog-20261115-231355` |
 | 2026-11-16 13:24 | 补充默认取消轮次上限 | 线上 200，2 节更新可见 | blog commit `c8d2c3a`；备份 `/home/ubuntu/backups/blog-20261116-132408` |
+| 2026-11-16 13:41 | 说明 token 预算默认关闭 | 线上 200，2 节更新可见 | blog commit `195f831`；备份 `/home/ubuntu/backups/blog-20261116-134125` |
 
 ## 待办
 
