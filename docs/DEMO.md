@@ -207,3 +207,12 @@ Do not commit `.env`; it is ignored. The jar is at `target/coding-agent.jar`.
 - This is a local demo; the HTTP server is unauthenticated. On macOS commands
   run in a sandbox-exec write jail with network denied, but reads and the
   kernel are shared with the host. It is not a container or VM.
+
+
+## 8. Inspect a long session
+
+Open the asset-system session (12,786 events). The console should render in
+about a second: only the newest 150 compact events load. Use `Load earlier
+events` to page backward; status, plan, files, and telemetry stay at the final
+snapshot. Expand an `LLM REQUEST` card and choose `Load full request body` to
+fetch one archived payload.

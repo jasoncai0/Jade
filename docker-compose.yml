@@ -1,0 +1,26 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: jade-mysql
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3307:3306"
+    environment:
+      MYSQL_DATABASE: jade
+      MYSQL_USER: jade
+      MYSQL_PASSWORD: jade_dev_password
+      MYSQL_ROOT_PASSWORD: jade_root_password
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-allowed-packet=64M
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ujade -pjade_dev_password --silent"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - jade_mysql_data:/var/lib/mysql
+
+volumes:
+  jade_mysql_data:

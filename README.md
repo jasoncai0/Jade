@@ -27,6 +27,7 @@ The project was developed and tested with JDK 23.0.2 and Maven 3.9.9.
 cd java-coding-agent
 cp .env.example .env
 # edit .env and set DEEPSEEK_API_KEY=sk-...
+docker compose up -d   # MySQL 8.4 on 127.0.0.1:3307
 ./run.sh
 ```
 
@@ -115,8 +116,15 @@ agent-workspaces/<name>/
   .agent/final.md         final answer, when present
 ```
 
-`AgentService` restores terminal sessions at startup and rehydrates each event
-log with its original sequence numbers, so SSE replay works after a restart.
+Session history is stored in MySQL 8.4 (started by `docker compose up -d`;
+host port `3307`). Startup imports legacy `.agent/events.jsonl` files once,
+then restores snapshots from `jade_sessions`. Live events are appended to
+`jade_events`; the compact projection strips large LLM bodies and tool payloads,
+so loading a long session only fetches a bounded tail. The Live Trace offers
+`Load earlier events` for older pages and `Load full request body` for one
+archived request. `AgentService` restores terminal sessions at startup and
+rehydrates each event log with its original sequence numbers, so SSE replay
+works after a restart.
 A session that was still `RUNNING` when the previous process died comes back as
 `FAILED` with an interruption message instead of pretending to be live.
 Restored sessions can be continued: sending a follow-up reopens the event log,
@@ -370,6 +378,8 @@ Errors use the HTTP status as `code` and `data: null`.
 | POST | `/api/runs/{id}/cancel` | request cancellation |
 | GET | `/api/runs/{id}/files` | workspace file listing |
 | GET | `/api/runs/{id}/file?path=...` | read one text file |
+| GET | `/api/runs/{id}/history?before=&limit=&compact=` | bounded event history page |
+| GET | `/api/runs/{id}/history/{seq}` | one full archived event payload |
 | GET | `/api/runs/{id}/events` | SSE stream with replay |
 
 The server binds `127.0.0.1` by default. Do not expose it on a public interface:
@@ -463,7 +473,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 60 tests:
+The suite has 62 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -481,6 +491,8 @@ The suite has 60 tests:
   token-budget stop, and an explicit positive turn cap
 - command sandbox write denial and SDK-directory exclusion
 - HTTP API and SSE replay against a real local server and a fake model
+- MySQL event-store pagination, compact LLM bodies, and full-payload lookup
+  (skipped automatically when the Docker MySQL instance is not running)
 - restart retention: a finished run is reloaded with its events, transcript, and files;
   an interrupted run is restored as `FAILED`
 

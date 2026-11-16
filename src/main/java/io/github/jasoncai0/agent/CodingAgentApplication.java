@@ -32,6 +32,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -95,6 +97,19 @@ public final class CodingAgentApplication {
                 + " | token budget " + (config.agent().tokenBudget() == 0 ? "unlimited" : config.agent().tokenBudget()));
         System.out.println("auto verify      " + config.agent().autoVerify());
         System.out.println("sandbox          " + new CommandRunner().sandbox().description());
+        boolean mysqlReady = false;
+        if (config.mysql() == null) {
+            System.out.println("mysql            not configured (history falls back to local artifacts)");
+        } else {
+            try (Connection ignored = DriverManager.getConnection(
+                    config.mysql().url(), config.mysql().user(), config.mysql().password())) {
+                mysqlReady = true;
+                System.out.println("mysql            connected " + config.mysql().url().replaceAll("\\?.*$", ""));
+            } catch (Exception e) {
+                System.out.println("mysql            NOT READY: " + e.getMessage()
+                        + " (run: docker compose up -d)");
+            }
+        }
 
         try {
             SkillRegistry skills = SkillRegistry.load(config.skillsDir());
@@ -138,6 +153,10 @@ public final class CodingAgentApplication {
         System.out.println();
         if (!javacResult.success()) {
             System.err.println("JDK compiler is required for the demo.");
+            return 1;
+        }
+        if (config.mysql() != null && !mysqlReady) {
+            System.err.println("MySQL is required for durable history; run `docker compose up -d`.");
             return 1;
         }
         System.out.println("Ready. Start the web console with: ./run.sh");
@@ -416,6 +435,6 @@ public final class CodingAgentApplication {
                     options.port() == null ? server.port() : options.port());
         }
         return new AppConfig(config.projectRoot(), config.skillsDir(), config.workspacesDir(),
-                config.llm(), agent, server);
+                config.llm(), agent, server, config.mysql());
     }
 }

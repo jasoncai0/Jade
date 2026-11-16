@@ -2,6 +2,8 @@ package io.github.jasoncai0.agent.agent;
 
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
+import io.github.jasoncai0.agent.history.EventStore;
+import io.github.jasoncai0.agent.history.MySqlEventStore;
 import io.github.jasoncai0.agent.language.Language;
 import io.github.jasoncai0.agent.llm.DeepSeekClient;
 import io.github.jasoncai0.agent.llm.LlmClient;
@@ -59,18 +61,24 @@ public final class AgentService implements AutoCloseable {
     private final SkillRegistry skills;
     private final ToolRegistry tools;
     private final ExecutorService executor;
+    private final EventStore eventStore;
     private final Map<String, AgentRun> runs = new ConcurrentHashMap<>();
     private final Set<Path> activeWorkspaces = ConcurrentHashMap.newKeySet();
     private final Object startLock = new Object();
     private volatile boolean closed;
 
     public AgentService(AppConfig config) {
-        this(config, new DeepSeekClient(config.llm()));
+        this(config, new DeepSeekClient(config.llm()), createStore(config));
     }
 
     public AgentService(AppConfig config, LlmClient llm) {
+        this(config, llm, null);
+    }
+
+    public AgentService(AppConfig config, LlmClient llm, EventStore eventStore) {
         this.config = config;
         this.llm = llm;
+        this.eventStore = eventStore;
         this.skills = SkillRegistry.load(config.skillsDir());
         this.tools = BuiltInTools.registry();
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -78,6 +86,9 @@ public final class AgentService implements AutoCloseable {
             Files.createDirectories(config.workspacesDir());
         } catch (IOException e) {
             throw new UncheckedIOException("Cannot create workspaces directory " + config.workspacesDir(), e);
+        }
+        if (eventStore != null && eventStore.isEmpty()) {
+            migrateLegacySessions();
         }
         restoreRuns();
         Log.info("agent.service.ready", Map.of(
@@ -126,7 +137,7 @@ public final class AgentService implements AutoCloseable {
         String id = "run-" + java.util.UUID.randomUUID().toString().substring(0, 8);
         RunState state = new RunState(id, cleanTask, workspace.root().getFileName().toString(),
                 config.agent().maxSteps());
-        RunEventLog events = new RunEventLog();
+        RunEventLog events = new RunEventLog(id, eventStore);
         RunControl control = new RunControl();
         CompletableFuture<RunSnapshot> completion = new CompletableFuture<>();
         AgentRun run = new AgentRun(id, workspace, state, events);
@@ -136,6 +147,9 @@ public final class AgentService implements AutoCloseable {
         }
         runs.put(id, run);
         state.setFiles(workspace.listFiles(500, 8));
+        if (eventStore != null) {
+            eventStore.saveSnapshot(state.snapshot());
+        }
 
         try {
             executor.submit(() -> executeTurn(run, control, completion, cleanTask, false));
@@ -184,6 +198,9 @@ public final class AgentService implements AutoCloseable {
             }
             run.state().beginTurn();
             run.events().open();
+            if (eventStore != null) {
+                eventStore.saveSnapshot(run.state().snapshot());
+            }
         }
         try {
             executor.submit(() -> executeTurn(run, control, completion, clean, true));
@@ -220,6 +237,13 @@ public final class AgentService implements AutoCloseable {
             completion.completeExceptionally(t);
             Log.error("agent.executor.failed", t, Map.of("runId", run.id()));
         } finally {
+            if (eventStore != null) {
+                try {
+                    eventStore.saveSnapshot(state.snapshot());
+                } catch (RuntimeException e) {
+                    Log.error("agent.snapshot.persist_failed", e, Map.of("runId", run.id()));
+                }
+            }
             run.finishTurn();
             activeWorkspaces.remove(workspace.root());
         }
@@ -361,6 +385,10 @@ public final class AgentService implements AutoCloseable {
      * process, so they are not inserted into the active-workspace set.
      */
     private void restoreRuns() {
+        if (eventStore != null) {
+            restoreFromStore();
+            return;
+        }
         List<Path> candidates = new ArrayList<>();
         try (Stream<Path> entries = Files.list(config.workspacesDir())) {
             entries.filter(Files::isDirectory)
@@ -405,12 +433,69 @@ public final class AgentService implements AutoCloseable {
                 "candidates", candidates.size()));
     }
 
+    private void restoreFromStore() {
+        int restored = 0;
+        for (RunSnapshot stored : eventStore.snapshots(MAX_RESTORED_SESSIONS)) {
+            try {
+                if (runs.containsKey(stored.id())) continue;
+                Path directory = config.workspacesDir().resolve(stored.workspace()).normalize();
+                if (!directory.startsWith(config.workspacesDir()) || !Files.isDirectory(directory)) {
+                    continue;
+                }
+                Workspace workspace = Workspace.open(directory);
+                RunState state = RunState.restore(stored);
+                RunSnapshot normalized = state.snapshot();
+                if (!normalized.status().equals(stored.status())) {
+                    eventStore.saveSnapshot(normalized);
+                }
+                RunEventLog events = RunEventLog.restored(stored.id(), eventStore,
+                        eventStore.lastSeq(stored.id()));
+                runs.put(stored.id(), new AgentRun(stored.id(), workspace, state, events));
+                restored++;
+            } catch (RuntimeException e) {
+                Log.warn("agent.sessions.mysql_restore_failed", Map.of(
+                        "runId", stored.id(),
+                        "error", String.valueOf(e.getMessage())));
+            }
+        }
+        Log.info("agent.sessions.restored", Map.of("restored", restored, "store", "mysql"));
+    }
+
+    /** One-time import of pre-MySQL transcript/event files. */
+    private void migrateLegacySessions() {
+        int imported = 0;
+        try (Stream<Path> entries = Files.list(config.workspacesDir())) {
+            for (Path directory : entries.filter(Files::isDirectory).toList()) {
+                if (!Files.isRegularFile(directory.resolve(".agent/transcript.json"))) continue;
+                try {
+                    Workspace workspace = Workspace.open(directory);
+                    RunArtifacts.StoredRun stored = RunArtifacts.load(workspace.root()).orElse(null);
+                    if (stored == null) continue;
+                    eventStore.importRun(stored.snapshot(), stored.events());
+                    imported++;
+                } catch (RuntimeException e) {
+                    Log.warn("agent.migration.skip", Map.of(
+                            "workspace", directory.getFileName().toString(),
+                            "error", String.valueOf(e.getMessage())));
+                }
+            }
+        } catch (IOException e) {
+            Log.warn("agent.migration.scan_failed", Map.of("error", String.valueOf(e.getMessage())));
+        }
+        Log.info("agent.sessions.migrated", Map.of("imported", imported));
+    }
+
     private long sessionModified(Path directory) {
         try {
             return Files.getLastModifiedTime(directory.resolve(".agent/transcript.json")).toMillis();
         } catch (IOException e) {
             return 0L;
         }
+    }
+
+    private static EventStore createStore(AppConfig config) {
+        if (config.mysql() == null) return null;
+        return new MySqlEventStore(config.mysql());
     }
 
     private String uniqueName() {
@@ -433,6 +518,29 @@ public final class AgentService implements AutoCloseable {
         return name;
     }
 
+    public EventStore.Page history(String id, long before, int limit, boolean compact) {
+        require(id);
+        if (eventStore == null) {
+            List<AgentEvent> events = require(id).events().snapshot();
+            long max = events.stream().mapToLong(AgentEvent::seq).max().orElse(0);
+            List<AgentEvent> tail = events.stream()
+                    .filter(e -> before <= 0 || e.seq() < before)
+                    .skip(Math.max(0, events.size() - limit))
+                    .toList();
+            long next = tail.isEmpty() ? before : tail.get(0).seq();
+            return new EventStore.Page(tail, next, false, max, events.size());
+        }
+        return eventStore.page(id, before, limit, compact);
+    }
+
+    public Optional<AgentEvent> fullEvent(String id, long seq) {
+        require(id);
+        if (eventStore == null) {
+            return require(id).events().snapshot().stream().filter(e -> e.seq() == seq).findFirst();
+        }
+        return eventStore.event(id, seq);
+    }
+
     @Override
     public void close() {
         if (closed) {
@@ -450,6 +558,9 @@ public final class AgentService implements AutoCloseable {
             run.permissions().close();
             run.questions().close();
             run.events().close();
+        }
+        if (eventStore != null) {
+            eventStore.close();
         }
         Log.info("agent.service.closed", Map.of("runs", runs.size()));
     }

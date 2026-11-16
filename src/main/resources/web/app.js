@@ -54,6 +54,8 @@ const state = {
   activePhase: null,
   phaseDetail: '',
   timelineCount: 0,
+  loadedEvents: 0,
+  snapshot: null,
   toolNodes: new Map(),
   terminal: false,
   finishRendered: false,
@@ -69,6 +71,12 @@ const state = {
   pendingPermission: null,
   pendingQuestion: null,
   traceOrder: 'asc',
+  oldestSeq: 0,
+  hasEarlier: false,
+  eventTotal: 0,
+  prependingHistory: false,
+  appendingHistory: false,
+  replayingHistory: false,
   lastFocused: null
 };
 
@@ -247,6 +255,10 @@ function showEmpty() {
   state.currentStep = 0;
   state.usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   clearTimeline();
+  state.loadedEvents = 0;
+  state.hasEarlier = false;
+  state.eventTotal = 0;
+  updateHistoryBar();
   renderPlan([]);
   renderFiles([]);
   renderUsage();
@@ -295,6 +307,9 @@ async function selectRun(id) {
   state.activePhase = null;
   state.phaseDetail = '';
   state.timelineCount = 0;
+  state.loadedEvents = 0;
+  state.hasEarlier = false;
+  state.eventTotal = 0;
   state.terminal = false;
   state.finishRendered = false;
   state.startedAt = 0;
@@ -329,7 +344,10 @@ async function selectRun(id) {
     const snapshot = await api(`/api/runs/${encodeURIComponent(id)}`);
     if (token !== state.selectionToken) return;
     applySnapshot(snapshot, true);
-    connect(id, 0);
+    await loadHistory(id, token, snapshot);
+    if (token !== state.selectionToken) return;
+    if (!state.terminal) connect(id, state.lastSeq);
+    else setStreamState('closed');
     loadFiles();
     loadPendingPermission(id);
     loadPendingQuestion(id);
@@ -341,8 +359,97 @@ async function selectRun(id) {
   }
 }
 
+
+async function loadHistory(id, token, snapshot) {
+  try {
+    const page = await api(`/api/runs/${encodeURIComponent(id)}/history?limit=150&compact=1`);
+    if (token !== state.selectionToken) return;
+    clearTimeline();
+    state.timelineCount = 0;
+    state.loadedEvents = 0;
+    state.prependingHistory = false;
+    state.appendingHistory = false;
+    state.replayingHistory = true;
+    for (const event of page.events || []) {
+      handleEvent(event.type, event.data || {}, event.timestamp, event.seq);
+    }
+    state.replayingHistory = false;
+    state.lastSeq = Number(page.lastSeq || 0);
+    state.loadedEvents = (page.events || []).length;
+    state.oldestSeq = Number(page.nextBefore || 0);
+    state.hasEarlier = Boolean(page.hasMore);
+    state.eventTotal = Number(page.eventCount || 0);
+    applySnapshot(snapshot, true);
+    updateHistoryBar();
+  } catch (error) {
+    state.lastSeq = 0;
+    state.hasEarlier = false;
+    state.loadedEvents = 0;
+    state.eventTotal = 0;
+    updateHistoryBar();
+    console.error('Cannot load bounded history', error);
+  }
+}
+
+function updateHistoryBar() {
+  const bar = $('historyBar');
+  if (!bar) return;
+  const visible = state.hasEarlier;
+  bar.hidden = !visible;
+  const btn = $('loadEarlierBtn');
+  if (btn) btn.disabled = !state.hasEarlier;
+  const count = $('historyCount');
+  if (count) count.textContent = state.eventTotal
+    ? `${state.loadedEvents.toLocaleString()} of ${state.eventTotal.toLocaleString()} events loaded`
+    : '';
+}
+
+async function loadEarlier() {
+  if (!state.hasEarlier || !state.selectedId) return;
+  const id = state.selectedId;
+  const token = state.selectionToken;
+  const btn = $('loadEarlierBtn');
+  if (btn) btn.disabled = true;
+  const timeline = $('timeline');
+  const anchor = timeline.scrollHeight - timeline.scrollTop;
+  try {
+    const page = await api(`/api/runs/${encodeURIComponent(id)}/history?before=${state.oldestSeq}&limit=150&compact=1`);
+    if (token !== state.selectionToken) return;
+    const events = page.events || [];
+    state.replayingHistory = true;
+    state.prependingHistory = state.traceOrder === 'asc';
+    state.appendingHistory = state.traceOrder === 'desc';
+    if (state.prependingHistory) {
+      for (let i = events.length - 1; i >= 0; i--) {
+        const event = events[i];
+        handleEvent(event.type, event.data || {}, event.timestamp, event.seq);
+      }
+    } else {
+      for (const event of events) {
+        handleEvent(event.type, event.data || {}, event.timestamp, event.seq);
+      }
+    }
+    state.prependingHistory = false;
+    state.appendingHistory = false;
+    state.replayingHistory = false;
+    state.loadedEvents += events.length;
+    if (state.snapshot) applySnapshot(state.snapshot, true);
+    if (state.terminal) setStreamState('closed');
+    state.oldestSeq = Number(page.nextBefore || state.oldestSeq);
+    state.hasEarlier = Boolean(page.hasMore);
+    state.eventTotal = Number(page.eventCount || state.eventTotal);
+    timeline.scrollTop = timeline.scrollHeight - anchor;
+    updateHistoryBar();
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    if (btn) btn.disabled = !state.hasEarlier;
+  }
+}
+
 function applySnapshot(snapshot, initial = false) {
   if (!snapshot) return;
+  state.snapshot = snapshot;
   const status = normalizeStatus(snapshot.status);
   state.status = status;
   state.startedAt = snapshot.startedAt || state.startedAt;
@@ -609,7 +716,7 @@ function connect(id, after = 0) {
       try {
         const payload = JSON.parse(event.data);
         state.lastSeq = Number(payload.seq || state.lastSeq || 0);
-        handleEvent(payload.type || type, payload.data || {}, payload.timestamp);
+        handleEvent(payload.type || type, payload.data || {}, payload.timestamp, payload.seq);
       } catch (error) {
         console.error('Cannot parse event', error);
       }
@@ -665,7 +772,7 @@ async function syncSnapshot() {
   }
 }
 
-function handleEvent(type, data, timestamp) {
+function handleEvent(type, data, timestamp, seq = 0) {
   switch (type) {
     case 'run.started':
       if (data.snapshot) applySnapshot(data.snapshot, true);
@@ -699,7 +806,7 @@ function handleEvent(type, data, timestamp) {
       break;
 
     case 'llm.request':
-      addLlmRequest(data, timestamp);
+      addLlmRequest(data, timestamp, seq);
       break;
 
     case 'tool.start':
@@ -747,7 +854,7 @@ function handleEvent(type, data, timestamp) {
       break;
 
     case 'permission.request':
-      showPermissionCard(data);
+      if (!state.replayingHistory) showPermissionCard(data);
       break;
 
     case 'permission.resolved':
@@ -756,7 +863,7 @@ function handleEvent(type, data, timestamp) {
       break;
 
     case 'question.request':
-      showQuestionCard(data);
+      if (!state.replayingHistory) showQuestionCard(data);
       break;
 
     case 'question.resolved':
@@ -1019,7 +1126,7 @@ async function loadPendingQuestion(id) {
 }
 
 function addQuestionResolved(data, timestamp) {
-  const entry = traceEntry('question', timestamp);
+  const { entry } = traceEntry('question', timestamp);
   const body = el('div', 'question-resolved');
   const selected = Array.isArray(data.selected) ? data.selected : [];
   const text = questionValue(data, 'text');
@@ -1035,7 +1142,7 @@ function addQuestionResolved(data, timestamp) {
 }
 
 function addPermissionResolved(data, timestamp) {
-  const entry = traceEntry('permission', timestamp);
+  const { entry } = traceEntry('permission', timestamp);
   const body = el('div', 'permission-resolved');
   body.textContent = `${permissionValue(data, 'decision')} · ${permissionValue(data, 'scope')} · ${permissionValue(data, 'reason')}`;
   entry.appendChild(body);
@@ -1092,7 +1199,11 @@ function traceEntry(kind, timestamp) {
   const time = el('span', 'trace-time', timeLabel(timestamp));
   top.append(label, time);
   entry.append(dot, top);
-  if (state.traceOrder === 'desc') {
+  if (state.prependingHistory) {
+    timeline.insertBefore(entry, timeline.firstChild);
+  } else if (state.appendingHistory) {
+    timeline.appendChild(entry);
+  } else if (state.traceOrder === 'desc') {
     timeline.insertBefore(entry, timeline.firstChild);
   } else {
     timeline.appendChild(entry);
@@ -1115,6 +1226,7 @@ function setTraceOrder(order) {
   $('traceOrderAsc').setAttribute('aria-pressed', String(next === 'asc'));
   $('traceOrderDesc').setAttribute('aria-pressed', String(next === 'desc'));
   timeline.scrollTop = next === 'desc' ? 0 : timeline.scrollHeight;
+  updateHistoryBar();
 }
 
 function scrollTimeline(force = false) {
@@ -1189,9 +1301,10 @@ function renderMarkdown(parent, text) {
   if (tail) appendTextBlock(parent, tail);
 }
 
-function addLlmRequest(data, timestamp) {
-  const raw = typeof data.body === 'string' ? data.body : '';
-  if (!raw.trim()) return;
+function addLlmRequest(data, timestamp, seq = 0) {
+  const raw = typeof data.body === 'string' ? data.body
+    : typeof data.bodyPreview === 'string' ? data.bodyPreview : '';
+  if (!raw.trim() && !data.bodyOmitted) return;
   const { entry, top } = traceEntry('llm', timestamp);
   const messages = Number(data.messages || 0);
   const tools = Number(data.tools || 0);
@@ -1204,7 +1317,28 @@ function addLlmRequest(data, timestamp) {
     el('span', 'llm-request-title', 'request body'),
     el('span', 'llm-request-meta', `${tools} tools · ${chars.toLocaleString()} chars`)
   );
-  details.append(summary, el('pre', 'llm-request-body', prettyArguments(raw)));
+  const pre = el('pre', 'llm-request-body', prettyArguments(raw));
+  details.append(summary, pre);
+  if (data.bodyOmitted && seq > 0) {
+    const load = el('button', 'ghost small llm-load-full', 'Load full request body');
+    load.type = 'button';
+    load.addEventListener('click', async () => {
+      load.disabled = true;
+      load.textContent = 'Loading…';
+      try {
+        const event = await api(`/api/runs/${encodeURIComponent(state.selectedId)}/history/${seq}`);
+        const full = event?.data?.body;
+        if (typeof full !== 'string') throw new Error('Full request body unavailable');
+        pre.textContent = prettyArguments(full);
+        load.remove();
+      } catch (error) {
+        load.disabled = false;
+        load.textContent = 'Retry full body';
+        toast(error.message, true);
+      }
+    });
+    details.appendChild(load);
+  }
   entry.appendChild(details);
   scrollTimeline();
 }
@@ -1672,6 +1806,7 @@ function wireEvents() {
   $('newRunBtn').addEventListener('click', newRun);
   $('traceOrderAsc').addEventListener('click', () => setTraceOrder('asc'));
   $('traceOrderDesc').addEventListener('click', () => setTraceOrder('desc'));
+  $('loadEarlierBtn').addEventListener('click', loadEarlier);
   $('howBtn').addEventListener('click', showHowItWorks);
   $('skillsBtn').addEventListener('click', showSkills);
   $('toolsBtn').addEventListener('click', showTools);

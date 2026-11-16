@@ -13,8 +13,15 @@ public record AppConfig(
         Path workspacesDir,
         LlmSettings llm,
         AgentSettings agent,
-        ServerSettings server
+        ServerSettings server,
+        MysqlSettings mysql
 ) {
+
+    /** Backwards-compatible constructor for tests and embedded use. */
+    public AppConfig(Path projectRoot, Path skillsDir, Path workspacesDir, LlmSettings llm,
+                     AgentSettings agent, ServerSettings server) {
+        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, null);
+    }
     public static final String VERSION = "1.0.0";
 
     public static AppConfig load(Path cwd) {
@@ -50,13 +57,19 @@ public record AppConfig(
                 value(get, "AGENT_HOST", "127.0.0.1"),
                 integer(get, "AGENT_PORT", 8080, 0, 65_535)
         );
+        MysqlSettings mysql = new MysqlSettings(
+                value(get, "JADE_MYSQL_URL", MysqlSettings.DEFAULT_URL),
+                value(get, "JADE_MYSQL_USER", "jade"),
+                value(get, "JADE_MYSQL_PASSWORD", "jade_dev_password")
+        );
         return new AppConfig(
                 root,
                 path(root, get, "AGENT_SKILLS_DIR", "skills"),
                 path(root, get, "AGENT_WORKSPACES_DIR", "agent-workspaces"),
                 llm,
                 agent,
-                server
+                server,
+                mysql
         );
     }
 

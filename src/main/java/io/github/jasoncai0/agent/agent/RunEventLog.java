@@ -1,5 +1,7 @@
 package io.github.jasoncai0.agent.agent;
 
+import io.github.jasoncai0.agent.history.EventStore;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -7,8 +9,28 @@ import java.util.Map;
 
 public final class RunEventLog {
     private final List<AgentEvent> events = new ArrayList<>();
+    private final String runId;
+    private final EventStore store;
     private long nextSeq = 1;
     private boolean closed;
+
+    public RunEventLog() {
+        this(null, null);
+    }
+
+    /** Live log backed by a durable store. */
+    public RunEventLog(String runId, EventStore store) {
+        this.runId = runId;
+        this.store = store;
+    }
+
+    /** Closed log restored from durable history; seq continues after lastSeq. */
+    public static RunEventLog restored(String runId, EventStore store, long lastSeq) {
+        RunEventLog log = new RunEventLog(runId, store);
+        log.nextSeq = Math.max(1, lastSeq + 1);
+        log.closed = true;
+        return log;
+    }
 
     /**
      * Rehydrates a closed log from persisted events. Sequence numbers are kept,
@@ -32,6 +54,9 @@ public final class RunEventLog {
     public synchronized AgentEvent emit(String type, Map<String, Object> data) {
         AgentEvent event = new AgentEvent(nextSeq++, System.currentTimeMillis(), type, data == null ? Map.of() : Map.copyOf(data));
         events.add(event);
+        if (store != null && runId != null) {
+            store.append(runId, event);
+        }
         notifyAll();
         return event;
     }
@@ -79,5 +104,9 @@ public final class RunEventLog {
 
     public synchronized int size() {
         return events.size();
+    }
+
+    public synchronized long lastSeq() {
+        return nextSeq - 1;
     }
 }

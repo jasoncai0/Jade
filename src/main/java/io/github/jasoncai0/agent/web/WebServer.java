@@ -9,6 +9,8 @@ import com.sun.net.httpserver.HttpServer;
 import io.github.jasoncai0.agent.agent.AgentEvent;
 import io.github.jasoncai0.agent.agent.AgentRun;
 import io.github.jasoncai0.agent.agent.AgentService;
+import io.github.jasoncai0.agent.agent.AgentEvent;
+import io.github.jasoncai0.agent.history.EventStore;
 import io.github.jasoncai0.agent.agent.RunSnapshot;
 import io.github.jasoncai0.agent.permission.PermissionDecision;
 import io.github.jasoncai0.agent.permission.PermissionRequest;
@@ -226,11 +228,59 @@ public final class WebServer implements AutoCloseable {
             sendData(exchange, 200, data);
             return;
         }
+        if (action.equals("history") && segments.length > 2 && method.equals("GET")) {
+            fullEvent(exchange, id, segments[2]);
+            return;
+        }
+        if (action.equals("history") && method.equals("GET")) {
+            history(exchange, id);
+            return;
+        }
         if (action.equals("events") && method.equals("GET")) {
             streamEvents(exchange, id);
             return;
         }
         sendError(exchange, 404, "Unknown run endpoint");
+    }
+
+    private void history(HttpExchange exchange, String id) throws IOException {
+        long before = longParam(exchange.getRequestURI(), "before", 0);
+        int limit = (int) longParam(exchange.getRequestURI(), "limit", 150);
+        boolean compact = !"0".equals(queryParam(exchange.getRequestURI(), "compact"));
+        EventStore.Page page = agentService.history(id, before, limit, compact);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("events", page.events());
+        data.put("nextBefore", page.nextBefore());
+        data.put("hasMore", page.hasMore());
+        data.put("lastSeq", page.lastSeq());
+        data.put("eventCount", page.eventCount());
+        sendData(exchange, 200, data);
+    }
+
+    private void fullEvent(HttpExchange exchange, String id, String rawSeq) throws IOException {
+        long seq;
+        try {
+            seq = Long.parseLong(rawSeq);
+        } catch (NumberFormatException e) {
+            sendError(exchange, 400, "Event sequence must be a number");
+            return;
+        }
+        AgentEvent event = agentService.fullEvent(id, seq).orElse(null);
+        if (event == null) {
+            sendError(exchange, 404, "Event not found");
+            return;
+        }
+        sendData(exchange, 200, event);
+    }
+
+    private long longParam(java.net.URI uri, String name, long fallback) {
+        String raw = queryParam(uri, name);
+        if (raw == null || raw.isBlank()) return fallback;
+        try {
+            return Long.parseLong(raw);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Query parameter '" + name + "' must be a number");
+        }
     }
 
     private void startRun(HttpExchange exchange) throws IOException {

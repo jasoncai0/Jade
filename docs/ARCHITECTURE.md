@@ -236,7 +236,21 @@ Permission sessions are per run and in-memory: a restart loses session grants.
 The layer is authorization and audit, not a kernel sandbox; an approved command
 still runs with the user's host permissions.
 
-## 10. Event model and SSE
+## 10. Durable history and SSE
+
+`RunEventLog` writes every event to `EventStore` (`MySqlEventStore` in
+production). `GET /api/runs/{id}/history` reads at most 500 events before a
+cursor and returns a compact projection: `llm.request.body` is replaced by a
+2,000-character preview, `tool.start.arguments` is capped at 4,000 characters,
+and `tool.end.output` at 8,000. The UI loads the newest 150 events, then
+prepends earlier pages without re-running live state transitions. Full LLM
+payloads are fetched only by `GET /api/runs/{id}/history/{seq}`.
+
+Legacy `.agent/events.jsonl` files are imported once when the MySQL store is
+empty. Restored snapshots come from `jade_sessions`; a `RUNNING` snapshot left
+by a previous process is converted to `FAILED`.
+
+## 11. Event model and SSE
 
 `RunEventLog` is append-only and sequence-numbered from 1. `RunEvent` carries
 `seq`, `timestamp`, `type`, and a non-null `data` map. The log supports:
