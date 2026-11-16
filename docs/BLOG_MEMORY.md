@@ -46,6 +46,7 @@
 | 2026-11-15 23:01 | 补充权限审批卡可见性坑 | 线上 200，8.2 节可见 | blog commit `0f8da6d`；备份 `/home/ubuntu/backups/blog-20261115-230109` |
 | 2026-11-15 23:14 | 补充默认沙箱导致本地服务起不来 | 线上 200，4.1 节可见 | blog commit `487138a`；备份 `/home/ubuntu/backups/blog-20261115-231355` |
 | 2026-11-16 13:24 | 补充默认取消轮次上限 | 线上 200，2 节更新可见 | blog commit `c8d2c3a`；备份 `/home/ubuntu/backups/blog-20261116-132408` |
+| 2026-11-16 14:42 | 补充无进展循环护栏 | 线上 200，无进展段落可见 | blog commit `50456c6`；备份 `/home/ubuntu/backups/blog-20261116-144240` |
 | 2026-11-16 13:41 | 说明 token 预算默认关闭 | 线上 200，2 节更新可见 | blog commit `195f831`；备份 `/home/ubuntu/backups/blog-20261116-134125` |
 | 2026-11-16 14:32 | 增加最终经验复盘与六个设计判断 | 线上 200，11 节可见 | blog commit `0b0b068`；备份 `/home/ubuntu/backups/blog-20261116-143212` |
 
