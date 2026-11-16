@@ -52,7 +52,9 @@ public record AppConfig(
                 PermissionMode.fromId(value(get, "AGENT_PERMISSION_MODE", "balanced")),
                 integer(get, "AGENT_TOKEN_BUDGET", (int) AgentSettings.DEFAULT_TOKEN_BUDGET,
                         0, 100_000_000),
-                bool(get, "AGENT_GOAL_MODE", true)
+                bool(get, "AGENT_GOAL_MODE", true),
+                integer(get, "AGENT_CONTEXT_TOKEN_BUDGET", AgentSettings.DEFAULT_CONTEXT_TOKEN_BUDGET,
+                        0, 200_000)
         );
         ServerSettings server = new ServerSettings(
                 value(get, "AGENT_HOST", "127.0.0.1"),

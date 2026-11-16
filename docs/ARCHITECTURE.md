@@ -193,17 +193,34 @@ instructions, not executable tools.
 
 ## 7. Context compaction
 
-`ContextCompactor` works on message groups: an assistant message and all of its
-tool results form one group. It preserves:
+`ContextCompactor` triggers on either an estimated-token budget
+(`AGENT_CONTEXT_TOKEN_BUDGET`, default 30,000) or a character budget
+(`AGENT_CONTEXT_CHAR_BUDGET`, default 120,000). The token estimator treats
+ASCII as roughly four characters per token and non-ASCII as one token per
+character, then adds per-message and tool-call overhead.
 
-- the system prompt at index 0
-- the first user task at index 1
-- the newest three groups by default
-- a system note marking the dropped range
+The pipeline:
 
-It drops oldest groups until the character budget is met. If a group is still
-too large, long content is truncated. It never leaves a tool result without its
-assistant call, because DeepSeek rejects orphaned tool messages.
+1. Pin the system prompt at index 0 and the first user task at index 1.
+2. Keep the group containing the latest user message; the newest three groups
+   are always retained.
+3. Micro-compact tool results larger than 6,000 characters: keep 3,000 leading
+   and 1,000 trailing characters, insert an omission marker, and leave the
+   assistant tool call intact.
+4. Drop oldest complete assistant/tool groups until the budget is met.
+5. If groups were dropped, call `ContextSummarizer` (production:
+   `LlmContextSummarizer`) to turn the dropped groups into a pinned system
+   message. The call is tool-free, uses `ResponseFormat.TEXT`, has a 1,200-token
+   output cap, and counts its usage in the run.
+6. If the summary call fails, insert a deterministic note. If the result is
+   still over budget, truncate long non-pinned contents. Tool-call messages are
+   never truncated, so a single oversized recent call can still exceed the
+   budget.
+
+The compactor never leaves a tool result without its assistant call, because
+DeepSeek rejects orphaned tool messages. The `compaction` event includes
+`removed`, `microCompacted`, `truncated`, before/after chars and tokens,
+`summarized`, and `summaryTokens`.
 
 
 ## 7.1 Goal review
@@ -301,7 +318,7 @@ Key events:
 | `usage` | cumulative `usage` |
 | `plan` / `workspace` | `plan` / `files` |
 | `verification` | `ok`, `skipped`, `summary`, `command`, `output`, `durationMs`, `step` |
-| `compaction` | `removed`, `beforeChars`, `afterChars` |
+| `compaction` | `removed`, `microCompacted`, `truncated`, `beforeChars`, `afterChars`, `beforeTokens`, `afterTokens`, `summarized`, `summaryTokens` |
 | `goal.review` | `aligned`, `missing`, `issues`, `usage` |
 | `goal.rejected` | `attempt`, `missing`, `issues` |
 | `reflection.requested` | `message`, `noProgressTurns`, `threshold`, `usage` |

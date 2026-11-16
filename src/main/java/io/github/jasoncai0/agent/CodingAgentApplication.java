@@ -95,6 +95,10 @@ public final class CodingAgentApplication {
                 : "MISSING (set DEEPSEEK_API_KEY in .env; real runs will fail)"));
         System.out.println("max turns        " + (config.agent().maxSteps() == 0 ? "unlimited" : config.agent().maxSteps())
                 + " | token budget " + (config.agent().tokenBudget() == 0 ? "unlimited" : config.agent().tokenBudget()));
+        System.out.println("context budget   " + config.agent().contextCharBudget() + " chars | "
+                + (config.agent().contextTokenBudget() == 0
+                ? "token trigger disabled"
+                : config.agent().contextTokenBudget() + " tokens"));
         System.out.println("auto verify      " + config.agent().autoVerify());
         System.out.println("sandbox          " + new CommandRunner().sandbox().description());
         boolean mysqlReady = false;
@@ -426,7 +430,7 @@ public final class CodingAgentApplication {
                     agent.commandTimeoutSeconds(),
                     agent.autoVerify(),
                     options.permissionMode() == null ? agent.permissionMode() : options.permissionMode(),
-                    agent.tokenBudget(), agent.goalMode());
+                    agent.tokenBudget(), agent.goalMode(), agent.contextTokenBudget());
         }
         ServerSettings server = config.server();
         if (options.port() != null || options.host() != null) {

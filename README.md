@@ -84,7 +84,7 @@ Every model turn executes these ten phases, in order:
 | 06 | Tools | Execute requested tools, one result per call |
 | 07 | Observe | Feed real output back into the transcript |
 | 08 | Verify | Compile and run changed artifacts |
-| 09 | Compact | Trim old context inside the character budget |
+| 09 | Compact | Token-budgeted pinned memory, tool-output micro-compaction, model summary |
 | 10 | Checkpoint | Persist transcript, events, and final answer |
 
 There is no default model-turn cap: `AGENT_MAX_STEPS=0` means unlimited. A
@@ -98,6 +98,31 @@ tool turns the framework injects a reflection checkpoint; after sixteen it stops
 with `LOOP_DETECTED`. A guard stop is `LOOP_DETECTED` or `BUDGET_EXCEEDED`; the
 workspace and transcript remain available for a follow-up. Ten phases still
 describe exactly one model turn.
+
+### Context compaction
+
+Compaction triggers when either the estimated token budget
+(`AGENT_CONTEXT_TOKEN_BUDGET`, default 30,000) or the character budget
+(`AGENT_CONTEXT_CHAR_BUDGET`, default 120,000) is exceeded.
+
+The pipeline is deterministic until the summary step:
+
+1. Pin the system prompt, the first user task, and the group containing the
+   latest user message.
+2. Micro-compact large tool outputs older than the recent window: keep the
+   first 3,000 and last 1,000 characters, and mark how much was omitted.
+3. Drop oldest complete assistant/tool groups, keeping at least three recent
+   groups.
+4. Ask the model, without tools, to summarize the dropped groups into pinned
+   memory. The summary prompt asks for constraints, decisions, files, commands,
+   failures, and remaining work. If the summary call fails, a deterministic
+   note is used instead.
+5. Truncate remaining long message contents if the budget is still exceeded.
+
+The `compaction` event reports removed messages, micro-compacted tool outputs,
+truncated messages, before/after characters and tokens, and summary token
+usage. A summary call costs one extra model request only when compaction drops
+history; it never calls tools or modifies the workspace.
 
 ### Session history and follow-ups
 
@@ -338,7 +363,7 @@ CodingAgentApplication
 │       ├── DeepSeekClient        OpenAI-compatible tool calling
 │       ├── ToolRegistry          built-ins + ServiceLoader
 │       ├── SkillRegistry         SKILL.md discovery and ranking
-│       ├── ContextCompactor      budgeted, tool-pair-safe trimming
+│       ├── ContextCompactor      budgeted memory pinning, tool-output micro-compaction, model summary
 │       ├── Verifier              detect language; javac/Maven, py_compile, node --check
 │       └── Workspace             path jail and bounded file IO
 └── WebServer                     JDK HttpServer, REST envelope, SSE, static UI
@@ -475,7 +500,8 @@ Environment variables take precedence over `.env`:
 | `AGENT_MAX_STEPS` | `0` | model turns per run; `0` = unlimited |
 | `AGENT_MAX_TOOL_CALLS_PER_STEP` | `8` | executed calls per turn |
 | `AGENT_TOKEN_BUDGET` | `0` | optional cumulative session token budget; `0` = unlimited |
-| `AGENT_CONTEXT_CHAR_BUDGET` | `120000` | compaction budget |
+| `AGENT_CONTEXT_CHAR_BUDGET` | `120000` | secondary character budget for compaction |
+| `AGENT_CONTEXT_TOKEN_BUDGET` | `30000` | primary estimated-token budget; `0` disables the token trigger |
 | `AGENT_COMMAND_TIMEOUT_SECONDS` | `120` | default command timeout |
 | `AGENT_AUTO_VERIFY` | `true` | compile gate before final answer |
 | `AGENT_GOAL_MODE` | `true` | independent goal review before success |
@@ -492,12 +518,12 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 66 tests:
+The suite has 70 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
 - tool registration, duplicate rejection, `ServiceLoader` discovery
-- context compaction without orphaned tool messages
+- context compaction without orphaned tool messages; pinned memory, tool-output micro-compaction, and model summary
 - goal review JSON parsing and rejection feedback before success
 - DeepSeek request shape, JSON mode, strict tools, beta routing, and 401 behavior
   against a local mock HTTP server

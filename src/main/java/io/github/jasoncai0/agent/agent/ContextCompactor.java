@@ -3,57 +3,125 @@ package io.github.jasoncai0.agent.agent;
 import io.github.jasoncai0.agent.llm.ChatMessage;
 import io.github.jasoncai0.agent.llm.Role;
 import io.github.jasoncai0.agent.llm.ToolCall;
+import io.github.jasoncai0.agent.llm.Usage;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Drops the oldest complete assistant/tool groups when the transcript exceeds the
- * character budget. It never separates a tool call from its tool result.
+ * Token/character-budgeted context compaction.
+ *
+ * <ol>
+ *   <li>Pins the system prompt, the first user task, and the group containing the latest user message.</li>
+ *   <li>Micro-compacts large tool outputs (head + tail) before summary.</li>
+ *   <li>Drops the oldest complete assistant/tool groups, keeping at least three recent groups.</li>
+ *   <li>Summarizes dropped groups with a tool-free LLM call and inserts the summary as pinned memory.</li>
+ *   <li>Falls back to a deterministic note, then truncates remaining long content if still over budget.</li>
+ * </ol>
  */
 public final class ContextCompactor {
     private static final int MIN_GROUPS_KEPT = 3;
+    private static final int MICRO_TOOL_CHARS = 6_000;
+    private static final int MICRO_HEAD_CHARS = 3_000;
+    private static final int MICRO_TAIL_CHARS = 1_000;
 
+    /** Backwards-compatible character-only compaction. */
     public Result compact(List<ChatMessage> messages, int charBudget) {
-        int before = chars(messages);
-        if (before <= charBudget || messages.size() <= 2) {
-            return new Result(List.copyOf(messages), 0, before, before, false);
+        return compact(messages, charBudget, 0, null);
+    }
+
+    public Result compact(List<ChatMessage> messages, int charBudget, int tokenBudget,
+                          ContextSummarizer summarizer) {
+        int beforeChars = chars(messages);
+        int beforeTokens = tokens(messages);
+        if ((charBudget <= 0 && tokenBudget <= 0) || messages.size() <= 2
+                || (!over(beforeChars, beforeTokens, charBudget, tokenBudget))) {
+            return new Result(List.copyOf(messages), 0, 0, 0,
+                    beforeChars, beforeChars, beforeTokens, beforeTokens,
+                    false, Usage.ZERO, false);
         }
 
         ChatMessage system = messages.get(0);
         ChatMessage firstUser = messages.get(1);
         List<List<ChatMessage>> groups = groups(messages.subList(2, messages.size()));
+        int latestUserGroup = -1;
+        for (int i = 0; i < groups.size(); i++) {
+            if (groups.get(i).stream().anyMatch(message -> message.role() == Role.USER)) {
+                latestUserGroup = i;
+            }
+        }
 
         int keepFrom = 0;
         int currentChars = chars(List.of(system, firstUser))
-                + groups.stream().mapToInt(this::chars).sum()
-                + 120;
-        while (groups.size() - keepFrom > MIN_GROUPS_KEPT && currentChars > charBudget) {
+                + groups.stream().mapToInt(this::chars).sum() + 120;
+        int currentTokens = tokens(List.of(system, firstUser))
+                + groups.stream().mapToInt(this::tokens).sum() + 30;
+        while (groups.size() - keepFrom > MIN_GROUPS_KEPT
+                && (latestUserGroup < 0 || keepFrom <= latestUserGroup)
+                && over(currentChars, currentTokens, charBudget, tokenBudget)) {
             currentChars -= chars(groups.get(keepFrom));
+            currentTokens -= tokens(groups.get(keepFrom));
             keepFrom++;
+        }
+
+        List<ChatMessage> removed = new ArrayList<>();
+        for (int i = 0; i < keepFrom; i++) {
+            removed.addAll(groups.get(i));
+        }
+        List<ChatMessage> kept = new ArrayList<>();
+        for (int i = keepFrom; i < groups.size(); i++) {
+            kept.addAll(groups.get(i));
+        }
+
+        MicroResult removedMicro = microCompact(removed);
+        MicroResult keptMicro = microCompact(kept);
+        removed = removedMicro.messages();
+        kept = keptMicro.messages();
+
+        String summary = null;
+        Usage summaryUsage = Usage.ZERO;
+        boolean summarized = false;
+        if (!removed.isEmpty() && summarizer != null) {
+            try {
+                ContextSummarizer.Summary result = summarizer.summarize(
+                        firstUser.content(), removed, 1_200);
+                if (!result.text().isBlank()) {
+                    summary = result.text();
+                    summaryUsage = result.usage();
+                    summarized = true;
+                }
+            } catch (RuntimeException ignored) {
+                // Summary is an optimization; the deterministic note below keeps the run going.
+            }
         }
 
         List<ChatMessage> compacted = new ArrayList<>();
         compacted.add(system);
         compacted.add(firstUser);
-        int removed = 0;
-        for (int i = 0; i < groups.size(); i++) {
-            if (i < keepFrom) {
-                removed += groups.get(i).size();
+        if (!removed.isEmpty()) {
+            if (summarized) {
+                compacted.add(ChatMessage.system("[Context summary of earlier conversation]\n" + summary));
             } else {
-                compacted.addAll(groups.get(i));
+                compacted.add(ChatMessage.system(
+                        "[Context compacted: " + removed.size()
+                                + " earlier messages were removed to stay inside the context budget. "
+                                + "The full event stream is in .agent/events.jsonl and MySQL history.]"));
             }
         }
-        if (currentChars > charBudget) {
-            compacted = truncateContents(compacted, charBudget);
-        }
-        if (removed > 0) {
-            compacted.add(2, ChatMessage.system(
-                    "[Context compacted: " + removed + " earlier messages were removed to stay inside the "
-                            + charBudget + " character budget. The original transcript is in .agent/transcript.json.]"));
-        }
-        int after = chars(compacted);
-        return new Result(List.copyOf(compacted), removed, before, after, removed > 0);
+        compacted.addAll(kept);
+
+        int protectedCount = removed.isEmpty() ? 2 : 3;
+        Truncation truncation = truncate(compacted, charBudget, tokenBudget, protectedCount);
+        compacted = truncation.messages();
+
+        int afterChars = chars(compacted);
+        int afterTokens = tokens(compacted);
+        boolean compactedFlag = !removed.isEmpty() || removedMicro.count() + keptMicro.count() > 0
+                || summarized || truncation.count() > 0;
+        return new Result(List.copyOf(compacted), removed.size(),
+                removedMicro.count() + keptMicro.count(), truncation.count(),
+                beforeChars, afterChars, beforeTokens, afterTokens,
+                summarized, summaryUsage, compactedFlag);
     }
 
     public int chars(List<ChatMessage> messages) {
@@ -70,20 +138,24 @@ public final class ContextCompactor {
         return total;
     }
 
+    public int tokens(List<ChatMessage> messages) {
+        return TokenEstimator.estimate(messages);
+    }
+
+    private static boolean over(int chars, int tokens, int charBudget, int tokenBudget) {
+        return (charBudget > 0 && chars > charBudget)
+                || (tokenBudget > 0 && tokens > tokenBudget);
+    }
+
     private static List<List<ChatMessage>> groups(List<ChatMessage> messages) {
         List<List<ChatMessage>> groups = new ArrayList<>();
         List<ChatMessage> current = null;
         for (ChatMessage message : messages) {
-            if (message.role() == Role.TOOL && current != null && !current.isEmpty()
-                    && current.get(current.size() - 1).role() == Role.ASSISTANT
-                    && current.get(current.size() - 1).hasToolCalls()) {
+            if (message.role() == Role.TOOL && current != null && !current.isEmpty()) {
                 current.add(message);
                 continue;
             }
             if (message.role() == Role.TOOL) {
-                if (current != null) {
-                    current.add(message);
-                }
                 continue;
             }
             current = new ArrayList<>();
@@ -93,30 +165,71 @@ public final class ContextCompactor {
         return groups;
     }
 
-    private static List<ChatMessage> truncateContents(List<ChatMessage> messages, int budget) {
-        int maxPerMessage = Math.max(1200, Math.min(12_000, budget / Math.max(4, messages.size())));
+    private MicroResult microCompact(List<ChatMessage> messages) {
         List<ChatMessage> result = new ArrayList<>();
+        int count = 0;
         for (ChatMessage message : messages) {
             String content = message.content();
-            if (content != null && content.length() > maxPerMessage) {
-                content = content.substring(0, maxPerMessage)
-                        + "\n... [message truncated by the context compactor]";
-            }
-            if (message.toolCalls().isEmpty()) {
-                result.add(new ChatMessage(message.role(), content, message.toolCallId(),
-                        List.of(), message.reasoningContent()));
+            if (message.role() == Role.TOOL && content != null && content.length() > MICRO_TOOL_CHARS) {
+                int omitted = content.length() - MICRO_HEAD_CHARS - MICRO_TAIL_CHARS;
+                String shortened = content.substring(0, MICRO_HEAD_CHARS)
+                        + "\n... [tool output micro-compacted: " + omitted
+                        + " chars omitted; full output is in .agent/events.jsonl]\n"
+                        + content.substring(content.length() - MICRO_TAIL_CHARS);
+                result.add(ChatMessage.tool(message.toolCallId(), shortened));
+                count++;
             } else {
                 result.add(message);
             }
         }
-        return result;
+        return new MicroResult(List.copyOf(result), count);
+    }
+
+    private Truncation truncate(List<ChatMessage> messages, int charBudget, int tokenBudget,
+                                int protectedCount) {
+        if (!over(chars(messages), tokens(messages), charBudget, tokenBudget)) {
+            return new Truncation(messages, 0);
+        }
+        int basis = charBudget > 0 ? charBudget : Math.max(4_000, tokenBudget * 4);
+        int maxPerMessage = Math.max(1_200, Math.min(12_000,
+                basis / Math.max(4, messages.size())));
+        List<ChatMessage> result = new ArrayList<>();
+        int count = 0;
+        for (int i = 0; i < messages.size(); i++) {
+            ChatMessage message = messages.get(i);
+            String content = message.content();
+            if (i < protectedCount || message.toolCalls().size() > 0) {
+                result.add(message);
+                continue;
+            }
+            if (content != null && content.length() > maxPerMessage) {
+                content = content.substring(0, maxPerMessage)
+                        + "\n... [message truncated by the context compactor]";
+                count++;
+            }
+            result.add(new ChatMessage(message.role(), content, message.toolCallId(),
+                    List.of(), message.reasoningContent()));
+        }
+        return new Truncation(List.copyOf(result), count);
+    }
+
+    private record MicroResult(List<ChatMessage> messages, int count) {
+    }
+
+    private record Truncation(List<ChatMessage> messages, int count) {
     }
 
     public record Result(
             List<ChatMessage> messages,
             int removed,
+            int microCompacted,
+            int truncated,
             int beforeChars,
             int afterChars,
+            int beforeTokens,
+            int afterTokens,
+            boolean summarized,
+            Usage summaryUsage,
             boolean compacted
     ) {
     }

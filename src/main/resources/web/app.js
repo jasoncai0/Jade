@@ -1474,9 +1474,16 @@ function addVerification(data, timestamp) {
 function addCompaction(data, timestamp) {
   const { entry } = traceEntry('system', timestamp);
   const note = el('div', 'system-note');
+  const parts = [`${data.removed ?? 0} messages removed`];
+  if (data.microCompacted) parts.push(`${data.microCompacted} tool outputs micro-compacted`);
+  if (data.truncated) parts.push(`${data.truncated} messages truncated`);
+  if (data.summarized) parts.push('model summary added');
+  const tokenPart = (data.beforeTokens || data.afterTokens)
+    ? `, ${Number(data.beforeTokens || 0).toLocaleString()} → ${Number(data.afterTokens || 0).toLocaleString()} tokens`
+    : '';
   note.append(
     el('span', 'system-key', 'context compacted · '),
-    document.createTextNode(`${data.removed ?? 0} messages removed, ${Number(data.beforeChars || 0).toLocaleString()} → ${Number(data.afterChars || 0).toLocaleString()} chars`)
+    document.createTextNode(`${parts.join(' · ')}${tokenPart}`)
   );
   entry.appendChild(note);
   scrollTimeline();

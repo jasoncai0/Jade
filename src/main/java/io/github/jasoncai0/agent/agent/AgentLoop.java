@@ -311,14 +311,25 @@ public final class AgentLoop {
 
                 phase(state, log, AgentPhase.COMPACT, cycle, "budget "
                         + settings.contextCharBudget() + " chars");
-                ContextCompactor.Result compaction = compactor.compact(messages, settings.contextCharBudget());
+                ContextCompactor.Result compaction = compactor.compact(
+                        messages, settings.contextCharBudget(), settings.contextTokenBudget(),
+                        new LlmContextSummarizer(llm));
                 if (compaction.compacted()) {
                     messages.clear();
                     messages.addAll(compaction.messages());
+                    if (compaction.summaryUsage().totalTokens() > 0) {
+                        state.addUsage(compaction.summaryUsage());
+                    }
                     log.emit("compaction", eventMap(
                             "removed", compaction.removed(),
+                            "microCompacted", compaction.microCompacted(),
+                            "truncated", compaction.truncated(),
                             "beforeChars", compaction.beforeChars(),
-                            "afterChars", compaction.afterChars()
+                            "afterChars", compaction.afterChars(),
+                            "beforeTokens", compaction.beforeTokens(),
+                            "afterTokens", compaction.afterTokens(),
+                            "summarized", compaction.summarized(),
+                            "summaryTokens", compaction.summaryUsage().totalTokens()
                     ));
                 }
 
