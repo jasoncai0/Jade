@@ -11,11 +11,11 @@ import java.util.Map;
  * A deliberately small .env reader: KEY=VALUE, optional export, optional quotes.
  * It never overrides real environment variables (AppConfig applies that precedence).
  */
-final class DotEnv {
+public final class DotEnv {
     private DotEnv() {
     }
 
-    static Map<String, String> read(Path file) {
+    public static Map<String, String> read(Path file) {
         Map<String, String> values = new LinkedHashMap<>();
         if (!Files.isRegularFile(file)) {
             return values;

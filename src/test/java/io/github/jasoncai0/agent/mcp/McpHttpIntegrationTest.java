@@ -112,12 +112,17 @@ class McpHttpIntegrationTest {
     @Test
     void expandsProjectRootInConfig() throws Exception {
         Path root = java.nio.file.Files.createTempDirectory("jade-mcp-config");
+        java.nio.file.Files.writeString(root.resolve(".env"), "JADE_TEST_MCP_URL=https://example.test/mcp\n");
         java.nio.file.Files.writeString(root.resolve("mcp.json"), """
-                {"mcpServers":{"local":{"type":"stdio","command":"${PROJECT_ROOT}/bin/server","args":["--x"]}}}
+                {"mcpServers":{
+                  "local":{"type":"stdio","command":"${PROJECT_ROOT}/bin/server","args":["--x"]},
+                  "env":{"type":"http","url":"${JADE_TEST_MCP_URL}"}
+                }}
                 """);
         McpConfig config = McpConfig.load(root);
-        assertEquals(1, config.servers().size());
+        assertEquals(2, config.servers().size());
         assertEquals(root.resolve("bin/server").toString(), config.servers().get(0).command());
         assertNotNull(config.servers().get(0).args());
+        assertEquals("https://example.test/mcp", config.servers().get(1).url());
     }
 }

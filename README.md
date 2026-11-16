@@ -407,6 +407,7 @@ the permission gate, so a GitHub write requires an explicit approval.
 ```bash
 cp mcp.json.example mcp.json
 export GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_...
+# or put GITHUB_PERSONAL_ACCESS_TOKEN=... in the project .env
 ./run.sh
 ```
 
