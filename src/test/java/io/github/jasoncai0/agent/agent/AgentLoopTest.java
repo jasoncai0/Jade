@@ -179,7 +179,7 @@ class AgentLoopTest {
     @Test
     void variedToolCallsWithoutWorkspaceProgressStopAtNoProgressLimit() throws Exception {
         ScriptedLlm llm = new ScriptedLlm();
-        for (int i = 0; i < 13; i++) {
+        for (int i = 0; i < 17; i++) {
             llm.script.add(toolResult("call-stall-" + i, "list_files", Map.of("path", "missing-" + i)));
         }
 
@@ -188,8 +188,8 @@ class AgentLoopTest {
                 harness.workspace, harness.state, harness.events, harness.control);
 
         assertEquals("LOOP_DETECTED", snapshot.status());
-        assertTrue(snapshot.error().contains("12 consecutive"), snapshot.error());
-        assertEquals(12, llm.requests.size());
+        assertTrue(snapshot.error().contains("16 consecutive"), snapshot.error());
+        assertEquals(16, llm.requests.size());
         assertTrue(harness.events.snapshot().stream()
                 .anyMatch(event -> event.type().equals("reflection.requested")));
         assertTrue(harness.events.snapshot().stream()

@@ -77,8 +77,8 @@ for turn in 1..∞ (or 1..maxSteps when a positive cap is configured):
     if a run_command shape repeats 8x in the last 10 calls: stop LOOP_DETECTED
     if result.toolCalls:
         execute up to maxToolCallsPerStep, one tool message per call
-        if no file/verification progress for 6 turns: inject reflection prompt
-        if no file/verification progress for 12 turns: stop LOOP_DETECTED
+        if no file/verification progress for 8 turns: inject reflection prompt
+        if no file/verification progress for 16 turns: stop LOOP_DETECTED
     emit observe
     emit verify
     if no tool calls:
@@ -328,8 +328,8 @@ phase, tool, and model-call boundaries.
 | User cancel | interruption, `CANCELLED`, transcript preserved |
 | Turn cap reached (positive cap) | `MAX_STEPS`, transcript/workspace preserved |
 | Repeated identical tool calls | `LOOP_DETECTED`, blocked calls get tool errors, transcript preserved |
-| 6 tool turns with no file change and no new verification | `reflection.requested`; model gets a reflection prompt once per streak |
-| 12 tool turns with no file change and no new verification | `LOOP_DETECTED`; no-progress guard; transcript preserved |
+| 8 tool turns with no file change and no new verification | `reflection.requested`; model gets a reflection prompt once per streak |
+| 16 tool turns with no file change and no new verification | `LOOP_DETECTED`; no-progress guard; transcript preserved |
 | Same command shape 8× in last 10 calls | `LOOP_DETECTED`; numeric arguments normalised |
 | Session token budget exhausted | `BUDGET_EXCEEDED`, transcript preserved |
 | Artifact write failure | warning; run still returns its snapshot |

@@ -9,8 +9,8 @@ package io.github.jasoncai0.agent.agent;
  * them because the caller resets its no-progress counter.</p>
  */
 public final class ReflectionPolicy {
-    public static final int REFLECT_AFTER = 6;
-    public static final int STALL_AFTER = 12;
+    public static final int REFLECT_AFTER = 8;
+    public static final int STALL_AFTER = 16;
 
     private ReflectionPolicy() {
     }

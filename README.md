@@ -92,8 +92,8 @@ bounded by a repeated-call guard and, optionally, a token budget. The budget
 (`AGENT_TOKEN_BUDGET`) defaults to `0` = unlimited; set a positive value only
 for unattended runs that need a hard cost ceiling. A loop guard stops four
 identical tool calls with the same arguments, or eight occurrences of the same
-command shape (numbers normalised) in the last ten calls. After six no-progress
-tool turns the framework injects a reflection checkpoint; after twelve it stops
+command shape (numbers normalised) in the last ten calls. After eight no-progress
+tool turns the framework injects a reflection checkpoint; after sixteen it stops
 with `LOOP_DETECTED`. A guard stop is `LOOP_DETECTED` or `BUDGET_EXCEEDED`; the
 workspace and transcript remain available for a follow-up. Ten phases still
 describe exactly one model turn.
@@ -460,7 +460,7 @@ The suite has 55 tests:
 - the full agent loop with a scripted model: real `javac`, `run_java`, a Python
   `run_code` path, Go build/run, and a compile-failure repair cycle
 - unbounded-turn completion, four-repeat loop detection, command-shape
-  normalisation, six-turn reflection request + twelve-turn no-progress stop,
+  normalisation, eight-turn reflection request + sixteen-turn no-progress stop,
   token-budget stop, and an explicit positive turn cap
 - command sandbox write denial and SDK-directory exclusion
 - HTTP API and SSE replay against a real local server and a fake model

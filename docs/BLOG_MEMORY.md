@@ -63,4 +63,4 @@
 3. 不在账本里写 API key、口令、用户隐私或大段工具输出。
 4. 发布前跑 `python3 scripts/check-tags.py content/posts data/tags.yaml` 和 `scripts/publish.sh`。
 
-| 17 | 2026-11-16 | 命令形状循环绕过 | `javap` 只改 `sed -n '60,80p'`/`'80,100p'`，20 轮无进展护栏前已烧 96 MB events | 完整参数指纹不同；数字变化不归一；无反思请求 | 6 轮注入 reflection 检查点；12 轮停止；`run_command` 形状归一化（数字→`#`），10 次窗口 8 次停止；新增 `reflect` 工具 | 2 |
+| 17 | 2026-11-16 | 命令形状循环绕过 | `javap` 只改 `sed -n '60,80p'`/`'80,100p'`，20 轮无进展护栏前已烧 96 MB events | 完整参数指纹不同；数字变化不归一；无反思请求 | 8 轮注入 reflection 检查点；16 轮停止；`run_command` 形状归一化（数字→`#`），10 次窗口 8 次停止；新增 `reflect` 工具 | 2 |
