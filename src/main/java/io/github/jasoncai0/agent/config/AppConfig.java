@@ -36,13 +36,15 @@ public record AppConfig(
                 integer(get, "DEEPSEEK_MAX_OUTPUT_TOKENS", 8192, 256, 32_768)
         );
         AgentSettings agent = new AgentSettings(
-                integer(get, "AGENT_MAX_STEPS", 10, 1, AgentSettings.HARD_MAX_STEPS),
+                integer(get, "AGENT_MAX_STEPS", 0, 0, AgentSettings.HARD_MAX_STEPS),
                 integer(get, "AGENT_MAX_TOOL_CALLS_PER_STEP", 8, 1,
                         AgentSettings.HARD_MAX_TOOL_CALLS_PER_STEP),
                 integer(get, "AGENT_CONTEXT_CHAR_BUDGET", 120_000, 20_000, 1_000_000),
                 integer(get, "AGENT_COMMAND_TIMEOUT_SECONDS", 120, 1, 600),
                 bool(get, "AGENT_AUTO_VERIFY", true),
-                PermissionMode.fromId(value(get, "AGENT_PERMISSION_MODE", "balanced"))
+                PermissionMode.fromId(value(get, "AGENT_PERMISSION_MODE", "balanced")),
+                integer(get, "AGENT_TOKEN_BUDGET", (int) AgentSettings.DEFAULT_TOKEN_BUDGET,
+                        0, 100_000_000)
         );
         ServerSettings server = new ServerSettings(
                 value(get, "AGENT_HOST", "127.0.0.1"),

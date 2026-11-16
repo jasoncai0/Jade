@@ -1,5 +1,6 @@
 package io.github.jasoncai0.agent.cli;
 
+import io.github.jasoncai0.agent.config.AgentSettings;
 import io.github.jasoncai0.agent.permission.PermissionMode;
 
 import java.util.ArrayList;
@@ -66,7 +67,7 @@ public record CliOptions(
                 }
                 case "--max-steps" -> {
                     String value = inline != null ? inline : requireValue(list, ++i, name);
-                    maxSteps = integer(name, value, 1, 30);
+                    maxSteps = integer(name, value, 0, AgentSettings.HARD_MAX_STEPS);
                 }
                 case "--port" -> {
                     String value = inline != null ? inline : requireValue(list, ++i, name);
@@ -155,7 +156,7 @@ public record CliOptions(
                   --task <text>          run one task headlessly
                   --task-file <file>     read the task from a UTF-8 file
                   --workspace <name>     fresh workspace name under agent-workspaces/
-                  --max-steps <1-30>     model turns per run (default 10)
+                  --max-steps <0-10000>  optional model-turn cap (default 0 = unlimited)
                   --port <0-65535>       web port (default 8080; 0 picks a free port)
                   --host <host>          bind host (default 127.0.0.1)
                   --permission-mode <m>  balanced (default), strict, read-only, bypass
@@ -170,7 +171,8 @@ public record CliOptions(
                   DEEPSEEK_BASE_URL      default https://api.deepseek.com
                   DEEPSEEK_MODEL         default deepseek-chat
                   AGENT_AUTO_VERIFY      default true
-                  AGENT_MAX_STEPS        default 10
+                  AGENT_MAX_STEPS        default 0 (unlimited)
+                  AGENT_TOKEN_BUDGET     default 2000000 (0 = unlimited)
                   AGENT_PERMISSION_MODE  default balanced
                   AGENT_PORT             default 8080
 

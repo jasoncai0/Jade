@@ -25,7 +25,7 @@ public record RunSnapshot(
 ) {
     public boolean terminal() {
         return switch (status) {
-            case "SUCCEEDED", "FAILED", "CANCELLED", "MAX_STEPS" -> true;
+            case "SUCCEEDED", "FAILED", "CANCELLED", "MAX_STEPS", "LOOP_DETECTED", "BUDGET_EXCEEDED" -> true;
             default -> false;
         };
     }

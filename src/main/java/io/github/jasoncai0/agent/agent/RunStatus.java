@@ -7,5 +7,7 @@ public enum RunStatus {
     SUCCEEDED,
     FAILED,
     CANCELLED,
-    MAX_STEPS
+    MAX_STEPS,
+    LOOP_DETECTED,
+    BUDGET_EXCEEDED
 }

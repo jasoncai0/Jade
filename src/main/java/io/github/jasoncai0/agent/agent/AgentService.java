@@ -289,6 +289,7 @@ public final class AgentService implements AutoCloseable {
         summary.put("baseUrl", config.llm().baseUrl());
         summary.put("apiKeyConfigured", config.hasApiKey());
         summary.put("maxSteps", config.agent().maxSteps());
+        summary.put("tokenBudget", config.agent().tokenBudget());
         summary.put("maxToolCallsPerStep", config.agent().maxToolCallsPerStep());
         summary.put("contextCharBudget", config.agent().contextCharBudget());
         summary.put("commandTimeoutSeconds", config.agent().commandTimeoutSeconds());

@@ -8,21 +8,32 @@ public record AgentSettings(
         int contextCharBudget,
         int commandTimeoutSeconds,
         boolean autoVerify,
-        PermissionMode permissionMode
+        PermissionMode permissionMode,
+        long tokenBudget
 ) {
-    public static final int HARD_MAX_STEPS = 30;
+    /** 0 means unlimited; positive values remain an optional explicit cap. */
+    public static final int HARD_MAX_STEPS = 10_000;
     public static final int HARD_MAX_TOOL_CALLS_PER_STEP = 20;
+    public static final long DEFAULT_TOKEN_BUDGET = 2_000_000L;
 
-    /** Compatibility constructor for tests and embedders: no interactive approver, so bypass. */
+    /** Compatibility constructor for tests and embedders: no interactive approver, no token budget. */
     public AgentSettings(int maxSteps, int maxToolCallsPerStep, int contextCharBudget,
                          int commandTimeoutSeconds, boolean autoVerify) {
         this(maxSteps, maxToolCallsPerStep, contextCharBudget, commandTimeoutSeconds, autoVerify,
-                PermissionMode.BYPASS);
+                PermissionMode.BYPASS, 0);
+    }
+
+    /** Compatibility constructor for permission-aware tests; no token budget. */
+    public AgentSettings(int maxSteps, int maxToolCallsPerStep, int contextCharBudget,
+                         int commandTimeoutSeconds, boolean autoVerify, PermissionMode permissionMode) {
+        this(maxSteps, maxToolCallsPerStep, contextCharBudget, commandTimeoutSeconds, autoVerify,
+                permissionMode, 0);
     }
 
     public AgentSettings {
-        if (maxSteps < 1 || maxSteps > HARD_MAX_STEPS) {
-            throw new IllegalArgumentException("AGENT_MAX_STEPS must be between 1 and " + HARD_MAX_STEPS);
+        if (maxSteps < 0 || maxSteps > HARD_MAX_STEPS) {
+            throw new IllegalArgumentException("AGENT_MAX_STEPS must be between 0 and " + HARD_MAX_STEPS
+                    + " (0 = unlimited)");
         }
         if (maxToolCallsPerStep < 1 || maxToolCallsPerStep > HARD_MAX_TOOL_CALLS_PER_STEP) {
             throw new IllegalArgumentException(
@@ -36,6 +47,9 @@ public record AgentSettings(
         }
         if (permissionMode == null) {
             throw new IllegalArgumentException("permissionMode is required");
+        }
+        if (tokenBudget < 0) {
+            throw new IllegalArgumentException("AGENT_TOKEN_BUDGET must be >= 0 (0 = unlimited)");
         }
     }
 }

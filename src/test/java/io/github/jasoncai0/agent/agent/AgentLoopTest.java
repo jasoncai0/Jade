@@ -8,6 +8,7 @@ import io.github.jasoncai0.agent.llm.ChatResult;
 import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.llm.ToolCall;
 import io.github.jasoncai0.agent.llm.Usage;
+import io.github.jasoncai0.agent.permission.PermissionMode;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.tool.builtin.BuiltInTools;
 import io.github.jasoncai0.agent.workspace.Workspace;
@@ -139,19 +140,92 @@ class AgentLoopTest {
         assertTrue(output.contains("hello-python"), output);
     }
 
+    @Test
+    void unlimitedTurnsReachCompletionWithoutMaxSteps() throws Exception {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.script.add(toolResult("call-write", "write_file", Map.of(
+                "path", "src/Main.java",
+                "content", "public class Main { public static void main(String[] a) { System.out.println(\"unbounded\"); } }")));
+        llm.script.add(finalResult("Unbounded run finished."));
+
+        AgentSettings unbounded = settings(0, 0);
+        Harness harness = harness(llm, unbounded);
+        RunSnapshot snapshot = harness.loop.run("Run without a hard turn cap",
+                harness.workspace, harness.state, harness.events, harness.control);
+
+        assertEquals("SUCCEEDED", snapshot.status());
+        assertEquals(0, snapshot.maxSteps());
+        assertEquals("Unbounded run finished.", snapshot.finalAnswer());
+    }
+
+    @Test
+    void repeatedIdenticalToolCallIsStoppedByLoopGuard() throws Exception {
+        ScriptedLlm llm = new ScriptedLlm();
+        for (int i = 0; i < 5; i++) {
+            llm.script.add(toolResult("call-loop-" + i, "list_files", Map.of("path", ".")));
+        }
+
+        Harness harness = harness(llm, settings(0, 0));
+        RunSnapshot snapshot = harness.loop.run("Loop forever",
+                harness.workspace, harness.state, harness.events, harness.control);
+
+        assertEquals("LOOP_DETECTED", snapshot.status());
+        assertTrue(snapshot.error().contains("repeated 4 times"), snapshot.error());
+        assertTrue(harness.events.snapshot().stream()
+                .anyMatch(event -> event.type().equals("loop.detected")));
+    }
+
+    @Test
+    void tokenBudgetStopsRunBeforeAnotherModelTurn() throws Exception {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.script.add(toolResult("call-budget-1", "list_files", Map.of("path", ".")));
+        llm.script.add(toolResult("call-budget-2", "write_file", Map.of(
+                "path", "src/Budget.java", "content", "public class Budget {}")));
+
+        Harness harness = harness(llm, settings(0, 25));
+        RunSnapshot snapshot = harness.loop.run("Spend the budget",
+                harness.workspace, harness.state, harness.events, harness.control);
+
+        assertEquals("BUDGET_EXCEEDED", snapshot.status());
+        assertTrue(snapshot.error().contains("token budget"), snapshot.error());
+        assertEquals(2, llm.requests.size());
+    }
+
+    @Test
+    void explicitPositiveCapStillWorks() throws Exception {
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.script.add(toolResult("call-cap-1", "list_files", Map.of("path", ".")));
+        llm.script.add(toolResult("call-cap-2", "list_files", Map.of("path", "src")));
+
+        Harness harness = harness(llm, settings(2, 0));
+        RunSnapshot snapshot = harness.loop.run("Use the explicit cap",
+                harness.workspace, harness.state, harness.events, harness.control);
+
+        assertEquals("MAX_STEPS", snapshot.status());
+        assertEquals(2, snapshot.step());
+    }
+
+    private static AgentSettings settings(int maxSteps, long tokenBudget) {
+        return new AgentSettings(maxSteps, 4, 20_000, 30, true, PermissionMode.BYPASS, tokenBudget);
+    }
+
     private Harness harness(LlmClient llm) {
+        return harness(llm, SETTINGS);
+    }
+
+    private Harness harness(LlmClient llm, AgentSettings settings) {
         try {
-            Path root = temp.resolve("ws");
+            Path root = temp.resolve("ws-" + System.nanoTime());
             Files.createDirectories(root.resolve(".agent-build/classes"));
             Workspace workspace = Workspace.open(root);
             Path skills = temp.resolve("skills");
             Files.createDirectories(skills);
             SkillRegistry registry = SkillRegistry.load(skills);
-            RunState state = new RunState("run-test", "task", "ws", SETTINGS.maxSteps());
+            RunState state = new RunState("run-test", "task", "ws", settings.maxSteps());
             RunEventLog events = new RunEventLog();
             RunControl control = new RunControl();
             return new Harness(
-                    new AgentLoop(llm, BuiltInTools.registry(), registry, SETTINGS, 1024),
+                    new AgentLoop(llm, BuiltInTools.registry(), registry, settings, 1024),
                     workspace, state, events, control);
         } catch (Exception e) {
             throw new RuntimeException(e);

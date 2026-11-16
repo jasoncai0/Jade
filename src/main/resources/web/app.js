@@ -19,11 +19,12 @@ const PHASE_DETAIL = Object.fromEntries(PHASES.map((phase) => [phase.id, phase.d
 const EVENT_TYPES = [
   'run.started', 'turn.started', 'phase', 'llm.request', 'assistant', 'tool.start', 'tool.end', 'usage', 'plan',
   'workspace', 'verification', 'compaction', 'permission.request', 'permission.resolved',
+  'loop.detected', 'budget.exceeded',
   'run.succeeded', 'run.failed',
   'run.cancelled', 'run.max_steps', 'run.finished'
 ];
 
-const TERMINAL = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'MAX_STEPS']);
+const TERMINAL = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'MAX_STEPS', 'LOOP_DETECTED', 'BUDGET_EXCEEDED']);
 const STATUS_TEXT = {
   QUEUED: 'queued',
   RUNNING: 'running',
@@ -31,7 +32,9 @@ const STATUS_TEXT = {
   SUCCEEDED: 'succeeded',
   FAILED: 'failed',
   CANCELLED: 'cancelled',
-  MAX_STEPS: 'max steps'
+  MAX_STEPS: 'max steps',
+  LOOP_DETECTED: 'loop guard',
+  BUDGET_EXCEEDED: 'token budget'
 };
 
 const state = {
@@ -44,7 +47,7 @@ const state = {
   es: null,
   selectionToken: 0,
   currentStep: 0,
-  maxSteps: 10,
+  maxSteps: 0,
   visited: new Set(),
   activePhase: null,
   phaseDetail: '',
@@ -66,6 +69,7 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+const maxLabel = () => (state.maxSteps > 0 ? String(state.maxSteps) : '∞');
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -142,9 +146,9 @@ function applyConfig(config) {
   $('emptySkills').textContent = config.skillCount ?? state.skills.length;
   setKeyState(config);
   if (!$('runView').classList.contains('hidden')) return;
-  if (config.maxSteps) {
-    state.maxSteps = config.maxSteps;
-    $('runTurn').textContent = `0 / ${config.maxSteps}`;
+  if (config.maxSteps !== undefined) {
+    state.maxSteps = Number(config.maxSteps) || 0;
+    $('runTurn').textContent = `0 / ${maxLabel()}`;
   }
 }
 
@@ -305,7 +309,7 @@ async function selectRun(id) {
   $('runTask').textContent = 'Loading run…';
   $('runId').textContent = id;
   $('runWorkspace').textContent = '—';
-  $('runTurn').textContent = `0 / ${state.maxSteps}`;
+  $('runTurn').textContent = `0 / ${maxLabel()}`;
   $('runElapsed').textContent = '00:00';
   $('streamState').className = 'stream-state';
   $('streamState').textContent = 'connecting';
@@ -334,14 +338,14 @@ function applySnapshot(snapshot, initial = false) {
   state.status = status;
   state.startedAt = snapshot.startedAt || state.startedAt;
   state.finishedAt = snapshot.finishedAt || 0;
-  state.maxSteps = snapshot.maxSteps || state.maxSteps;
+  state.maxSteps = Number(snapshot.maxSteps ?? state.maxSteps) || 0;
   state.terminal = isTerminal(status);
 
   $('runTask').textContent = snapshot.task || '(untitled task)';
   $('runId').textContent = snapshot.id || '';
   $('runWorkspace').textContent = snapshot.workspace || '—';
-  $('runTurn').textContent = `${snapshot.step || 0} / ${state.maxSteps}`;
-  $('turnReadout').textContent = `Turn ${snapshot.step || 0} / ${state.maxSteps}`;
+  $('runTurn').textContent = `${snapshot.step || 0} / ${maxLabel()}`;
+  $('turnReadout').textContent = `Turn ${snapshot.step || 0} / ${maxLabel()}`;
   if (snapshot.step && snapshot.step > state.currentStep) {
     state.currentStep = snapshot.step;
   }
@@ -540,8 +544,8 @@ function renderPhases() {
     cell.append(index, name, dot);
     grid.appendChild(cell);
   }
-  $('runTurn').textContent = `${state.currentStep || 0} / ${state.maxSteps}`;
-  $('turnReadout').textContent = `Turn ${state.currentStep || 0} / ${state.maxSteps}`;
+  $('runTurn').textContent = `${state.currentStep || 0} / ${maxLabel()}`;
+  $('turnReadout').textContent = `Turn ${state.currentStep || 0} / ${maxLabel()}`;
   $('statTurns').textContent = String(state.currentStep || 0);
 }
 
@@ -667,7 +671,7 @@ function handleEvent(type, data, timestamp) {
         state.currentStep = step;
         state.visited.clear();
       }
-      if (data.maxSteps) state.maxSteps = Number(data.maxSteps);
+      if (data.maxSteps !== undefined) state.maxSteps = Number(data.maxSteps) || 0;
       if (data.phase) {
         state.activePhase = data.phase;
         state.visited.add(data.phase);
@@ -747,6 +751,14 @@ function handleEvent(type, data, timestamp) {
 
     case 'run.max_steps':
       setRunStatus('MAX_STEPS');
+      break;
+
+    case 'loop.detected':
+      setRunStatus('LOOP_DETECTED');
+      break;
+
+    case 'budget.exceeded':
+      setRunStatus('BUDGET_EXCEEDED');
       break;
 
     case 'run.finished':
@@ -1165,7 +1177,7 @@ function addFinish(snapshot) {
   entry.classList.toggle('fail', status === 'FAILED');
   const box = el('div', `finish-box${status === 'FAILED' ? ' fail' : ''}`);
   const head = el('div', 'finish-head');
-  const title = status === 'SUCCEEDED' ? 'task complete · verified' : status === 'FAILED' ? 'run failed' : status === 'CANCELLED' ? 'run cancelled' : 'turn limit reached';
+  const title = status === 'SUCCEEDED' ? 'task complete · verified' : status === 'FAILED' ? 'run failed' : status === 'CANCELLED' ? 'run cancelled' : status === 'LOOP_DETECTED' ? 'loop guard stopped the run' : status === 'BUDGET_EXCEEDED' ? 'token budget reached' : 'turn limit reached';
   head.append(el('span', null, title), el('span', null, snapshot.id || ''));
   box.appendChild(head);
 

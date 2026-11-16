@@ -87,7 +87,8 @@ public final class CodingAgentApplication {
         System.out.println("API key          " + (config.hasApiKey()
                 ? "configured"
                 : "MISSING (set DEEPSEEK_API_KEY in .env; real runs will fail)"));
-        System.out.println("max turns        " + config.agent().maxSteps());
+        System.out.println("max turns        " + (config.agent().maxSteps() == 0 ? "unlimited" : config.agent().maxSteps())
+                + " | token budget " + (config.agent().tokenBudget() == 0 ? "unlimited" : config.agent().tokenBudget()));
         System.out.println("auto verify      " + config.agent().autoVerify());
         System.out.println("sandbox          " + new CommandRunner().sandbox().description());
 
@@ -169,7 +170,9 @@ public final class CodingAgentApplication {
             System.out.println("Model        " + config.llm().model());
             System.out.println("Skills       " + agentService.skills().all().size() + " | Tools "
                     + agentService.tools().names().size() + " | max turns "
-                    + config.agent().maxSteps() + " | auto-verify=" + config.agent().autoVerify());
+                    + (config.agent().maxSteps() == 0 ? "unlimited" : config.agent().maxSteps())
+                    + " | token budget " + (config.agent().tokenBudget() == 0 ? "unlimited" : config.agent().tokenBudget())
+                    + " | auto-verify=" + config.agent().autoVerify());
             System.out.println("Workspaces   " + config.workspacesDir());
             System.out.println("API key      " + (config.hasApiKey() ? "configured" : "MISSING - set DEEPSEEK_API_KEY in .env"));
             System.out.println("Stop with    Ctrl+C");
@@ -224,7 +227,9 @@ public final class CodingAgentApplication {
             console.info("Jade " + AppConfig.VERSION);
             console.info("Run        " + started.id());
             console.info("Workspace  " + run.workspace().root());
-            console.info("Model      " + config.llm().model() + " | max turns " + config.agent().maxSteps());
+            console.info("Model      " + config.llm().model() + " | max turns "
+                + (config.agent().maxSteps() == 0 ? "unlimited" : config.agent().maxSteps())
+                + " | token budget " + (config.agent().tokenBudget() == 0 ? "unlimited" : config.agent().tokenBudget()));
             console.info("Task       " + task);
             console.info("");
 
@@ -332,7 +337,8 @@ public final class CodingAgentApplication {
                     agent.contextCharBudget(),
                     agent.commandTimeoutSeconds(),
                     agent.autoVerify(),
-                    options.permissionMode() == null ? agent.permissionMode() : options.permissionMode());
+                    options.permissionMode() == null ? agent.permissionMode() : options.permissionMode(),
+                    agent.tokenBudget());
         }
         ServerSettings server = config.server();
         if (options.port() != null || options.host() != null) {

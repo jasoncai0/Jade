@@ -27,8 +27,9 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * One run of the agent. Every model turn executes the same ten phases; the hard
- * model-turn cap is AgentSettings.maxSteps (default 10).
+ * One run of the agent. Every model turn executes the same ten phases. Turn
+ * count is unlimited by default; a positive AgentSettings.maxSteps is an
+ * optional cap, and a token budget plus repeated-call guard bound long runs.
  */
 public final class AgentLoop {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -43,6 +44,7 @@ public final class AgentLoop {
     private final PermissionBroker permissionBroker;
     private final PermissionSession permissionSession;
     private final ContextCompactor compactor = new ContextCompactor();
+    private final ToolLoopGuard loopGuard = new ToolLoopGuard();
 
     public AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
                      AgentSettings settings, int maxOutputTokens) {
@@ -117,12 +119,27 @@ public final class AgentLoop {
         context.refreshFiles();
         PermissionManager permissions = new PermissionManager(settings.permissionMode(), permissionSession,
                 permissionBroker, state, log, control, workspace);
+        loopGuard.reset();
 
         try {
             boolean completed = false;
             int totalToolCalls = 0;
-            for (int cycle = 1; cycle <= settings.maxSteps(); cycle++) {
+            int cycle = 1;
+            while (true) {
+                if (settings.maxSteps() > 0 && cycle > settings.maxSteps()) {
+                    break;
+                }
                 control.checkCancelled();
+                if (settings.tokenBudget() > 0 && state.usage().totalTokens() >= settings.tokenBudget()) {
+                    String message = "Stopped: session token budget " + settings.tokenBudget()
+                            + " was exhausted (" + state.usage().totalTokens() + " tokens). "
+                            + "The workspace and transcript are preserved; raise AGENT_TOKEN_BUDGET "
+                            + "or send a follow-up to continue.";
+                    state.budgetExceeded(message);
+                    log.emit("budget.exceeded", eventMap("message", message, "budget", settings.tokenBudget(),
+                            "usage", state.usage()));
+                    break;
+                }
                 phase(state, log, AgentPhase.INTAKE, cycle,
                         "run " + state.id() + ", task " + task.length() + " chars");
                 phase(state, log, AgentPhase.CONTEXT, cycle,
@@ -175,6 +192,31 @@ public final class AgentLoop {
                         hasCalls ? result.toolCalls().size() + " tool call(s)" : "no tool calls");
                 int[] stats = {0, 0};
                 if (hasCalls) {
+                    String loopReason = null;
+                    for (ToolCall call : result.toolCalls()) {
+                        loopReason = loopGuard.observe(call);
+                        if (loopReason != null) {
+                            break;
+                        }
+                    }
+                    if (loopReason != null) {
+                        rejectToolCalls(result.toolCalls(), messages, loopReason, "loop", state, log);
+                        state.loopDetected(loopReason);
+                        log.emit("loop.detected", eventMap("message", loopReason, "usage", state.usage()));
+                        break;
+                    }
+                    if (settings.tokenBudget() > 0
+                            && state.usage().totalTokens() >= settings.tokenBudget()) {
+                        String message = "Stopped: session token budget " + settings.tokenBudget()
+                                + " was exhausted (" + state.usage().totalTokens() + " tokens). "
+                                + "The workspace and transcript are preserved; raise AGENT_TOKEN_BUDGET "
+                                + "or send a follow-up to continue.";
+                        rejectToolCalls(result.toolCalls(), messages, message, "budget", state, log);
+                        state.budgetExceeded(message);
+                        log.emit("budget.exceeded", eventMap("message", message,
+                                "budget", settings.tokenBudget(), "usage", state.usage()));
+                        break;
+                    }
                     totalToolCalls += result.toolCalls().size();
                     executeTools(result.toolCalls(), messages, context, state, log, control, stats, permissions);
                 }
@@ -230,6 +272,7 @@ public final class AgentLoop {
                     completed = true;
                     break;
                 }
+                cycle++;
             }
 
             if (!completed && state.status().equals(RunStatus.RUNNING.name())) {
@@ -282,6 +325,27 @@ public final class AgentLoop {
             ));
         }
         return state.snapshot();
+    }
+
+    private void rejectToolCalls(List<ToolCall> calls, List<ChatMessage> messages, String reason,
+                                 String guard, RunState state, RunEventLog log) {
+        for (ToolCall call : calls) {
+            String output = "Blocked by " + guard + " guard: " + reason;
+            messages.add(ChatMessage.tool(call.id(), output));
+            log.emit("tool.start", eventMap(
+                    "id", call.id(),
+                    "name", call.name(),
+                    "arguments", call.arguments()
+            ));
+            log.emit("tool.end", eventMap(
+                    "id", call.id(),
+                    "name", call.name(),
+                    "ok", false,
+                    "output", output,
+                    "durationMs", 0L,
+                    "data", Map.of("guard", guard)
+            ));
+        }
     }
 
     private void executeTools(List<ToolCall> calls, List<ChatMessage> messages,

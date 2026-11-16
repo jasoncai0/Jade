@@ -508,7 +508,7 @@ textarea:focus {
 .mini-status.succeeded { color: var(--lime); }
 .mini-status.failed, .mini-status.cancelled { color: var(--red); }
 .mini-status.running { color: var(--amber); }
-.mini-status.max_steps { color: var(--amber); }
+.mini-status.max_steps, .mini-status.loop_detected, .mini-status.budget_exceeded { color: var(--amber); }
 
 .retention-note {
   margin: 9px 0 0 10px;
@@ -681,7 +681,7 @@ textarea:focus {
 .status-badge.running .status-dot { animation: pulse 1.2s ease-in-out infinite; }
 .status-badge.succeeded { color: var(--lime); border-color: rgba(185, 255, 102, 0.27); }
 .status-badge.failed, .status-badge.cancelled { color: var(--red); border-color: rgba(255, 123, 123, 0.25); }
-.status-badge.max_steps { color: var(--amber); border-color: rgba(255, 190, 115, 0.25); }
+.status-badge.max_steps, .status-badge.loop_detected, .status-badge.budget_exceeded { color: var(--amber); border-color: rgba(255, 190, 115, 0.25); }
 
 .run-meta {
   display: flex;

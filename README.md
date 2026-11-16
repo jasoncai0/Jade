@@ -86,10 +86,13 @@ Every model turn executes these ten phases, in order:
 | 09 | Compact | Trim old context inside the character budget |
 | 10 | Checkpoint | Persist transcript, events, and final answer |
 
-The model-turn cap is a separate hard limit: `AGENT_MAX_STEPS` defaults to 10
-and supports up to 30. A run may choose to finish in fewer turns; it cannot
-exceed the configured number. This is intentional: ten phases describe one
-turn, while the turn cap bounds one user request.
+There is no default model-turn cap: `AGENT_MAX_STEPS=0` means unlimited. A
+positive value remains an optional explicit cap (up to 10000). Long runs are
+bounded by two safety mechanisms instead of a turn counter: a token budget
+(`AGENT_TOKEN_BUDGET`, default 2,000,000) and a loop guard that stops four
+identical tool calls with the same arguments. A guard stop is `LOOP_DETECTED`
+or `BUDGET_EXCEEDED`; the workspace and transcript remain available for a
+follow-up. Ten phases still describe exactly one model turn.
 
 ### Session history and follow-ups
 
@@ -417,8 +420,9 @@ Environment variables take precedence over `.env`:
 | `DEEPSEEK_MODEL` | `deepseek-chat` | model id |
 | `DEEPSEEK_TIMEOUT_SECONDS` | `180` | request timeout |
 | `DEEPSEEK_MAX_OUTPUT_TOKENS` | `8192` | response token cap |
-| `AGENT_MAX_STEPS` | `10` | model turns per run |
+| `AGENT_MAX_STEPS` | `0` | model turns per run; `0` = unlimited |
 | `AGENT_MAX_TOOL_CALLS_PER_STEP` | `8` | executed calls per turn |
+| `AGENT_TOKEN_BUDGET` | `2000000` | cumulative session token budget; `0` = unlimited |
 | `AGENT_CONTEXT_CHAR_BUDGET` | `120000` | compaction budget |
 | `AGENT_COMMAND_TIMEOUT_SECONDS` | `120` | default command timeout |
 | `AGENT_AUTO_VERIFY` | `true` | compile gate before final answer |
@@ -435,7 +439,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 32 tests:
+The suite has 52 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -448,6 +452,8 @@ The suite has 32 tests:
   generic tools
 - the full agent loop with a scripted model: real `javac`, `run_java`, a Python
   `run_code` path, Go build/run, and a compile-failure repair cycle
+- unbounded-turn completion, four-repeat loop detection, token-budget stop, and
+  an explicit positive turn cap
 - command sandbox write denial and SDK-directory exclusion
 - HTTP API and SSE replay against a real local server and a fake model
 - restart retention: a finished run is reloaded with its events, transcript, and files;

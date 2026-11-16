@@ -210,6 +210,22 @@ public final class RunState {
         finishedAt = System.currentTimeMillis();
     }
 
+    public synchronized void loopDetected(String message) {
+        status = RunStatus.LOOP_DETECTED.name();
+        phase = AgentPhase.CHECKPOINT.id();
+        phaseLabel = AgentPhase.CHECKPOINT.label();
+        error = message;
+        finishedAt = System.currentTimeMillis();
+    }
+
+    public synchronized void budgetExceeded(String message) {
+        status = RunStatus.BUDGET_EXCEEDED.name();
+        phase = AgentPhase.CHECKPOINT.id();
+        phaseLabel = AgentPhase.CHECKPOINT.label();
+        error = message;
+        finishedAt = System.currentTimeMillis();
+    }
+
     public synchronized void maxSteps(String message) {
         status = RunStatus.MAX_STEPS.name();
         finalAnswer = message;

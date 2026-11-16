@@ -129,7 +129,7 @@
       </header>
       <div class="run-meta">
         <span class="meta-item"><span class="meta-label">workspace</span><code id="runWorkspace">—</code></span>
-        <span class="meta-item"><span class="meta-label">turn</span><span id="runTurn">0 / 10</span></span>
+        <span class="meta-item"><span class="meta-label">turn</span><span id="runTurn">0 / ∞</span></span>
         <span class="meta-item"><span class="meta-label">elapsed</span><span id="runElapsed">00:00</span></span>
         <span class="meta-item"><span class="meta-label">stream</span><span id="streamState" class="stream-state">connecting</span></span>
       </div>
@@ -138,9 +138,9 @@
         <div class="card-head">
           <div>
             <div class="eyebrow"><span class="eyebrow-line"></span>Ten-phase loop</div>
-            <p class="card-sub">Every model turn runs the whole pipeline. The loop is capped at the configured turn limit.</p>
+            <p class="card-sub">Every model turn runs the whole pipeline. Turns are unbounded by default; repeated calls and the token budget act as guardrails.</p>
           </div>
-          <div class="turn-readout" id="turnReadout">Turn 0 / 10</div>
+          <div class="turn-readout" id="turnReadout">Turn 0 / ∞</div>
         </div>
         <div class="phase-grid" id="phaseGrid"></div>
         <div class="phase-detail" id="phaseDetail">

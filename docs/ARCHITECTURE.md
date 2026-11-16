@@ -52,9 +52,9 @@ The phrase "ten step loop" is represented at two levels:
 1. **Ten phases per model turn.** Every turn emits `intake`, `context`,
    `skills`, `plan`, `model`, `tools`, `observe`, `verify`, `compact`, and
    `checkpoint` phase events, in that order.
-2. **A bounded number of model turns per user turn.** `AgentSettings.maxSteps`
-   defaults to 10 and is hard-capped at 30 by validation. This is the outer
-   bound; a run can finish earlier.
+2. **No default number-of-turns cap.** `AgentSettings.maxSteps == 0` means
+   unlimited; a positive value is an optional explicit cap (up to 10000). The
+   session token budget and repeated-call guard are the long-run safety nets.
 
 The model only participates in `model` and `tools`. The framework owns the rest
 so that verification, compaction, and persistence cannot be skipped by a model
@@ -65,11 +65,13 @@ decision.
 ```
 state.markRunning()
 messages = [system(prompt + skill catalog + selected skills), user(task + tree)]
-for turn in 1..maxSteps:
+for turn in 1..∞ (or 1..maxSteps when a positive cap is configured):
     emit intake/context/skills/plan
+    if token_budget > 0 and usage.total >= token_budget: stop BUDGET_EXCEEDED
     result = llm.chat(messages, toolSpecs, temperature=0.2)
     add assistant(result); emit usage/assistant
     emit tools
+    if the same tool+args repeats 4x: emit tool errors, stop LOOP_DETECTED
     if result.toolCalls:
         execute up to maxToolCallsPerStep, one tool message per call
     emit observe
@@ -317,7 +319,9 @@ phase, tool, and model-call boundaries.
 | Tool argument error | error tool message; run continues |
 | Tool runtime exception | error tool result; run continues |
 | User cancel | interruption, `CANCELLED`, transcript preserved |
-| Turn cap reached | `MAX_STEPS`, transcript/workspace preserved |
+| Turn cap reached (positive cap) | `MAX_STEPS`, transcript/workspace preserved |
+| Repeated identical tool calls | `LOOP_DETECTED`, blocked calls get tool errors, transcript preserved |
+| Session token budget exhausted | `BUDGET_EXCEEDED`, transcript preserved |
 | Artifact write failure | warning; run still returns its snapshot |
 
 ## 11. Security boundaries
