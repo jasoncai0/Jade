@@ -9,6 +9,7 @@ import io.github.jasoncai0.agent.cli.ConsoleRenderer;
 import io.github.jasoncai0.agent.config.AgentSettings;
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
+import io.github.jasoncai0.agent.mcp.McpConfig;
 import io.github.jasoncai0.agent.permission.PermissionDecision;
 import io.github.jasoncai0.agent.permission.PermissionScope;
 import io.github.jasoncai0.agent.question.QuestionMode;
@@ -121,6 +122,11 @@ public final class CodingAgentApplication {
                     + skills.all().stream().map(Skill::name).toList());
             ToolRegistry tools = BuiltInTools.registry();
             System.out.println("tools            " + tools.names().size() + " " + tools.names());
+            McpConfig mcp = McpConfig.load(config.projectRoot());
+            System.out.println("mcp              " + (mcp.servers().isEmpty()
+                    ? "off (create mcp.json from mcp.json.example)"
+                    : mcp.servers().size() + " configured " + mcp.servers().stream()
+                    .map(server -> server.name() + ":" + server.transport()).toList()));
             System.out.println("languages        " + String.join(", ", Language.displayNames()));
             Files.createDirectories(config.workspacesDir());
             System.out.println("workspaces       writable=" + Files.isWritable(config.workspacesDir()));

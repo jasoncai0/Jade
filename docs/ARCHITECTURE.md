@@ -264,6 +264,31 @@ Permission sessions are per run and in-memory: a restart loses session grants.
 The layer is authorization and audit, not a kernel sandbox; an approved command
 still runs with the user's host permissions.
 
+## 9.1 MCP tools
+
+`McpManager` loads `mcp.json` (or `JADE_MCP_CONFIG`) and connects each enabled
+server before the service starts accepting runs. Two transports are supported:
+
+- **stdio** — child process with newline-delimited JSON-RPC; stderr is drained
+  for diagnostics; a timeout closes the child.
+- **Streamable HTTP** — one POST per JSON-RPC message, JSON or SSE responses,
+  `Mcp-Session-Id` retained, `MCP-Protocol-Version` sent after initialization.
+
+After `initialize`/`notifications/initialized`, Jade calls `tools/list` and
+registers each tool as `mcp_<server>_<tool>` (sanitized, collision-suffixed,
+64 chars max). `tools/call` results are flattened to text plus
+`structuredContent`; `isError` becomes a tool error. Namespacing avoids
+collisions with built-ins and ServiceLoader tools.
+
+MCP tools are external actions, so `PermissionPolicy` sees an unknown tool and
+asks in `balanced` mode. Approval scope is per run; a GitHub write therefore
+requires an explicit decision. A failed server is recorded in `/api/mcp` and
+skipped; it never prevents the rest of Jade from starting. Tokens are expanded
+from environment variables at load time and are never written to events.
+
+MCP v1 deliberately covers tools only: no resources, prompts, sampling,
+elicitation, OAuth flow, or automatic server installation.
+
 ## 10. Durable history and SSE
 
 `RunEventLog` writes every event to `EventStore` (`MySqlEventStore` in

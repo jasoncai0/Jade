@@ -7,6 +7,7 @@ import io.github.jasoncai0.agent.history.MySqlEventStore;
 import io.github.jasoncai0.agent.language.Language;
 import io.github.jasoncai0.agent.llm.DeepSeekClient;
 import io.github.jasoncai0.agent.llm.LlmClient;
+import io.github.jasoncai0.agent.mcp.McpManager;
 import io.github.jasoncai0.agent.skill.Skill;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.tool.ToolRegistry;
@@ -60,6 +61,7 @@ public final class AgentService implements AutoCloseable {
     private final LlmClient llm;
     private final SkillRegistry skills;
     private final ToolRegistry tools;
+    private final McpManager mcp;
     private final ExecutorService executor;
     private final EventStore eventStore;
     private final Map<String, AgentRun> runs = new ConcurrentHashMap<>();
@@ -81,6 +83,7 @@ public final class AgentService implements AutoCloseable {
         this.eventStore = eventStore;
         this.skills = SkillRegistry.load(config.skillsDir());
         this.tools = BuiltInTools.registry();
+        this.mcp = McpManager.connect(config.projectRoot(), this.tools);
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
             Files.createDirectories(config.workspacesDir());
@@ -343,6 +346,7 @@ public final class AgentService implements AutoCloseable {
         summary.put("skillsDir", config.skillsDir().toString());
         summary.put("toolCount", tools.names().size());
         summary.put("skillCount", skills.all().size());
+        summary.put("mcp", mcp.summary());
         summary.put("languages", Language.ids());
         CommandSandbox sandbox = new CommandRunner().sandbox();
         summary.put("sandbox", sandbox.modeName());
@@ -371,6 +375,10 @@ public final class AgentService implements AutoCloseable {
 
     public ToolRegistry tools() {
         return tools;
+    }
+
+    public McpManager mcp() {
+        return mcp;
     }
 
     public SkillRegistry skills() {
@@ -556,6 +564,7 @@ public final class AgentService implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        mcp.close();
         for (AgentRun run : runs.values()) {
             run.permissions().close();
             run.questions().close();

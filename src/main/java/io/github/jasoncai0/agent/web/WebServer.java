@@ -138,6 +138,10 @@ public final class WebServer implements AutoCloseable {
             sendData(exchange, 200, agentService.toolDescriptions());
             return;
         }
+        if (path.equals("/api/mcp") && method.equals("GET")) {
+            sendData(exchange, 200, agentService.mcp().summary());
+            return;
+        }
         if (path.equals("/api/skills") && method.equals("GET")) {
             sendData(exchange, 200, agentService.skillDescriptions());
             return;

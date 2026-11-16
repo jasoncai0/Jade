@@ -157,6 +157,10 @@ function applyConfig(config) {
   $('modelPill').title = config.baseUrl || '';
   $('emptyTools').textContent = config.toolCount ?? state.tools.length;
   $('emptySkills').textContent = config.skillCount ?? state.skills.length;
+  const mcp = config.mcp || {};
+  $('mcpMode').textContent = mcp.configured
+    ? `${mcp.serverCount || 0} server${(mcp.serverCount || 0) === 1 ? '' : 's'} · ${mcp.toolCount || 0} tools`
+    : 'off';
   setKeyState(config);
   if (!$('runView').classList.contains('hidden')) return;
   if (config.maxSteps !== undefined) {

@@ -396,6 +396,32 @@ The API is `GET /api/runs/{id}/questions` and
 `{"selected":["opt-1"],"text":""}`. In a headless CLI, a TTY is required for
 an answer; non-interactive runs cancel the run rather than guess.
 
+## MCP servers and GitHub
+
+Jade is an MCP **client**. Put a Claude-compatible `mcp.json` at the project
+root (or point `JADE_MCP_CONFIG` at another file); the file is ignored by git.
+MCP tools are discovered at startup and exposed to the model with stable names
+such as `mcp_github_create_or_update_file`. Every MCP call still goes through
+the permission gate, so a GitHub write requires an explicit approval.
+
+```bash
+cp mcp.json.example mcp.json
+export GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_...
+./run.sh
+```
+
+The example uses GitHub's remote Streamable HTTP server
+`https://api.githubcopilot.com/mcp/`. A token needs repository access and the
+toolset you intend to use; the agent can list repositories and create or update
+files, but cannot do anything the token is not allowed to do. For a local stdio
+server use `"type":"stdio"`, `"command":"..."`, and `"args":[...]` instead.
+`GET /api/mcp` reports configured servers, connection errors and tool counts;
+the Tools dialog lists each discovered MCP tool.
+
+MCP scope in this version is tools only (no resources, prompts, sampling or
+OAuth login). A server failure is reported and does not prevent Jade from
+starting. Do not put a literal token in `mcp.json`; use `${VAR}` references.
+
 ## HTTP API
 
 All JSON responses use:
@@ -411,6 +437,7 @@ Errors use the HTTP status as `code` and `data: null`.
 | GET | `/api/health` | status, model, key presence, run count |
 | GET | `/api/config` | non-secret runtime configuration |
 | GET | `/api/tools` | registered tools and JSON schemas |
+| GET | `/api/mcp` | MCP server status and discovered tool count |
 | GET | `/api/skills` | discovered skills |
 | GET | `/api/runs` | run snapshots, newest first |
 | POST | `/api/runs` | start `{task, workspace?}`; returns 202 |
@@ -513,6 +540,8 @@ Environment variables take precedence over `.env`:
 | `AGENT_PORT` | `8080` | HTTP port, `0` chooses a free port |
 | `AGENT_SKILLS_DIR` | `skills` | skill root |
 | `AGENT_WORKSPACES_DIR` | `agent-workspaces` | run root |
+| `JADE_MCP_CONFIG` | `mcp.json` | MCP server config; missing file disables MCP |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | empty | GitHub PAT referenced by the example MCP config |
 
 ## Tests
 
@@ -520,13 +549,14 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 70 tests:
+The suite has 73 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
 - tool registration, duplicate rejection, `ServiceLoader` discovery
 - context compaction without orphaned tool messages; pinned memory, tool-output micro-compaction, and model summary
 - goal review JSON parsing and rejection feedback before success
+- MCP stdio/HTTP initialization, tool discovery, namespaced registration, calls, and env-expanded config
 - DeepSeek request shape, JSON mode, strict tools, beta routing, and 401 behavior
   against a local mock HTTP server
 - language detection and aliases; real Python `py_compile`, JavaScript

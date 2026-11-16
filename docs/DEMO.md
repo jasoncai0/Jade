@@ -173,6 +173,24 @@ EOF
 Restart the server; `GET /api/skills` now returns six skills. Remove the
 directory to restore the demo state.
 
+### MCP tools
+
+Copy the example and export a GitHub token with repository access:
+
+```bash
+cp mcp.json.example mcp.json
+export GITHUB_PERSONAL_ACCESS_TOKEN=github_pat_...
+./run.sh
+```
+
+`GET /api/mcp` should show the `github` server connected and its tool count.
+Open **Tools** in the console; names such as
+`mcp_github_create_or_update_file` are discovered dynamically. Ask Jade to
+“create a file in owner/repo on a new branch and open a pull request”; the
+write tool raises an approval card before it touches GitHub. Remove
+`mcp.json` to return to the built-in-only demo. The config is gitignored and
+the token is read from the environment, not stored in the file.
+
 ## 7. Headless fallback
 
 If the browser is inconvenient:
