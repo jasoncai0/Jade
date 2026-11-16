@@ -86,7 +86,7 @@ Claude Agent SDK 的 `max_turns`、`max_budget_usd` 默认都是 `None`；DSH �
 
 ## 6. 交付检查清单
 
-- [x] `mvn test`：52 tests，0 failures
+- [x] `mvn test`：55 tests，0 failures
 - [x] `mvn package`：2.5 MB shaded jar
 - [x] 真实 DeepSeek Java/Python/JS/Go 运行
 - [x] 权限审批（write / execute / network）与审计

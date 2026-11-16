@@ -1682,3 +1682,18 @@ textarea:focus {
 .status-badge.waiting_approval { color: var(--amber); border-color: rgba(255, 190, 115, 0.4); }
 .status-badge.waiting_approval .status-dot { animation: pulse 1.2s ease-in-out infinite; }
 .trace-entry.permission .trace-dot { background: var(--amber); }
+
+.reflection-body {
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

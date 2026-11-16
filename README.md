@@ -91,10 +91,12 @@ positive value remains an optional explicit cap (up to 10000). Long runs are
 bounded by a repeated-call guard and, optionally, a token budget. The budget
 (`AGENT_TOKEN_BUDGET`) defaults to `0` = unlimited; set a positive value only
 for unattended runs that need a hard cost ceiling. A loop guard stops four
-identical tool calls with the same arguments, or 20 consecutive tool turns
-that change no workspace file and produce no new verification. A guard stop is
-`LOOP_DETECTED` or `BUDGET_EXCEEDED`; the workspace and transcript remain
-available for a follow-up. Ten phases still describe exactly one model turn.
+identical tool calls with the same arguments, or eight occurrences of the same
+command shape (numbers normalised) in the last ten calls. After six no-progress
+tool turns the framework injects a reflection checkpoint; after twelve it stops
+with `LOOP_DETECTED`. A guard stop is `LOOP_DETECTED` or `BUDGET_EXCEEDED`; the
+workspace and transcript remain available for a follow-up. Ten phases still
+describe exactly one model turn.
 
 ### Session history and follow-ups
 
@@ -225,7 +227,7 @@ needed. When a Go workspace has no `go.mod`, Jade creates a minimal module
 
 ### Tools
 
-Twelve built-in tools are registered at startup:
+Thirteen built-in tools are registered at startup:
 
 | Tool | Purpose |
 |------|---------|
@@ -241,6 +243,7 @@ Twelve built-in tools are registered at startup:
 | `run_java` | Java-only alias for running a main class |
 | `update_plan` | Publish plan items and statuses |
 | `load_skill` | Load a full skill playbook on demand |
+| `reflect` | Record a structured diagnosis, evidence, attempts, next action, and stop decision |
 
 `ToolRegistry` also discovers external tools through `ServiceLoader`. See
 [Extending Jade](#extending-jade).
@@ -443,7 +446,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 53 tests:
+The suite has 55 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -456,8 +459,9 @@ The suite has 53 tests:
   generic tools
 - the full agent loop with a scripted model: real `javac`, `run_java`, a Python
   `run_code` path, Go build/run, and a compile-failure repair cycle
-- unbounded-turn completion, four-repeat loop detection, 20-turn no-progress
-  detection, token-budget stop, and an explicit positive turn cap
+- unbounded-turn completion, four-repeat loop detection, command-shape
+  normalisation, six-turn reflection request + twelve-turn no-progress stop,
+  token-budget stop, and an explicit positive turn cap
 - command sandbox write denial and SDK-directory exclusion
 - HTTP API and SSE replay against a real local server and a fake model
 - restart retention: a finished run is reloaded with its events, transcript, and files;

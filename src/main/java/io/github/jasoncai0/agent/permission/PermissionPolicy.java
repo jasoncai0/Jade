@@ -6,7 +6,7 @@ import java.util.Set;
 
 public final class PermissionPolicy {
     private static final Set<String> READ_TOOLS = Set.of(
-            "read_file", "list_files", "search_text", "update_plan", "load_skill");
+            "read_file", "list_files", "search_text", "update_plan", "load_skill", "reflect");
     private static final CommandClassifier CLASSIFIER = new CommandClassifier();
 
     private final PermissionMode mode;

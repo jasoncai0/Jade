@@ -37,6 +37,25 @@ public final class RunArtifacts {
     public record StoredRun(RunSnapshot snapshot, List<AgentEvent> events) {
     }
 
+    /** Append a model-authored reflection without putting it in the transcript. */
+    public static void appendReflection(Workspace workspace, String runId, int step, String arguments) {
+        try {
+            Path dir = workspace.root().resolve(".agent");
+            Files.createDirectories(dir);
+            ObjectNode line = JSON.createObjectNode();
+            line.put("ts", System.currentTimeMillis());
+            line.put("runId", runId);
+            line.put("step", step);
+            line.put("arguments", arguments == null ? "" : arguments);
+            Files.writeString(dir.resolve("reflections.jsonl"), JSON.writeValueAsString(line) + "\n",
+                    StandardCharsets.UTF_8,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
+        } catch (IOException | RuntimeException ignored) {
+            // Reflection is auxiliary; never fail the run because its audit line failed.
+        }
+    }
+
     public static String persist(Workspace workspace, RunSnapshot snapshot,
                                  List<ChatMessage> messages, RunEventLog events) {
         try {

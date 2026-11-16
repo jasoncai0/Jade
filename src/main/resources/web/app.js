@@ -19,7 +19,7 @@ const PHASE_DETAIL = Object.fromEntries(PHASES.map((phase) => [phase.id, phase.d
 const EVENT_TYPES = [
   'run.started', 'turn.started', 'phase', 'llm.request', 'assistant', 'tool.start', 'tool.end', 'usage', 'plan',
   'workspace', 'verification', 'compaction', 'permission.request', 'permission.resolved',
-  'loop.detected', 'budget.exceeded',
+  'loop.detected', 'budget.exceeded', 'reflection.requested', 'reflection.recorded',
   'run.succeeded', 'run.failed',
   'run.cancelled', 'run.max_steps', 'run.finished'
 ];
@@ -730,6 +730,14 @@ function handleEvent(type, data, timestamp) {
       addCompaction(data, timestamp);
       break;
 
+    case 'reflection.requested':
+      addReflection(data, timestamp, false);
+      break;
+
+    case 'reflection.recorded':
+      addReflection(data, timestamp, true);
+      break;
+
     case 'permission.request':
       showPermissionCard(data);
       break;
@@ -1170,6 +1178,22 @@ function addCompaction(data, timestamp) {
     document.createTextNode(`${data.removed ?? 0} messages removed, ${Number(data.beforeChars || 0).toLocaleString()} → ${Number(data.afterChars || 0).toLocaleString()} chars`)
   );
   entry.appendChild(note);
+  scrollTimeline();
+}
+
+function addReflection(data, timestamp, recorded) {
+  const { entry } = traceEntry('system', timestamp);
+  const note = el('div', 'system-note');
+  note.append(
+    el('span', 'system-key', recorded ? 'reflection recorded · ' : 'reflection requested · '),
+    document.createTextNode(recorded
+      ? 'the model recorded a diagnosis and next action'
+      : `${data.noProgressTurns ?? 0} turns without workspace or verification progress`)
+  );
+  entry.appendChild(note);
+  if (data.message || data.arguments) {
+    entry.appendChild(el('pre', 'reflection-body', data.arguments || data.message));
+  }
   scrollTimeline();
 }
 

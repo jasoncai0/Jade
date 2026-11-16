@@ -74,8 +74,11 @@ for turn in 1..∞ (or 1..maxSteps when a positive cap is configured):
     add assistant(result); emit usage/assistant
     emit tools
     if the same tool+args repeats 4x: emit tool errors, stop LOOP_DETECTED
+    if a run_command shape repeats 8x in the last 10 calls: stop LOOP_DETECTED
     if result.toolCalls:
         execute up to maxToolCallsPerStep, one tool message per call
+        if no file/verification progress for 6 turns: inject reflection prompt
+        if no file/verification progress for 12 turns: stop LOOP_DETECTED
     emit observe
     emit verify
     if no tool calls:
@@ -261,6 +264,8 @@ Key events:
 | `plan` / `workspace` | `plan` / `files` |
 | `verification` | `ok`, `skipped`, `summary`, `command`, `output`, `durationMs`, `step` |
 | `compaction` | `removed`, `beforeChars`, `afterChars` |
+| `reflection.requested` | `message`, `noProgressTurns`, `threshold`, `usage` |
+| `reflection.recorded` | `step`, `arguments`, `usage` |
 | `permission.request` | `id`, `runId`, `tool`, `kind`, `risk`, `summary`, `detail`, `target`, `options`, `createdAt`, `expiresAt` |
 | `permission.resolved` | `id`, `decision`, `scope`, `reason` |
 | `run.finished` | final `snapshot` |
@@ -323,7 +328,9 @@ phase, tool, and model-call boundaries.
 | User cancel | interruption, `CANCELLED`, transcript preserved |
 | Turn cap reached (positive cap) | `MAX_STEPS`, transcript/workspace preserved |
 | Repeated identical tool calls | `LOOP_DETECTED`, blocked calls get tool errors, transcript preserved |
-| 20 tool turns with no file change and no new verification | `LOOP_DETECTED`, no-progress guard; transcript preserved |
+| 6 tool turns with no file change and no new verification | `reflection.requested`; model gets a reflection prompt once per streak |
+| 12 tool turns with no file change and no new verification | `LOOP_DETECTED`; no-progress guard; transcript preserved |
+| Same command shape 8× in last 10 calls | `LOOP_DETECTED`; numeric arguments normalised |
 | Session token budget exhausted | `BUDGET_EXCEEDED`, transcript preserved |
 | Artifact write failure | warning; run still returns its snapshot |
 

@@ -12,7 +12,7 @@ mvn -version
 ./run.sh --check
 ```
 
-Expected: `javac 21+`, Maven, Python 3, Node.js, Go, 12 tools, 6 skills, writable workspace. The API
+Expected: `javac 21+`, Maven, Python 3, Node.js, Go, 13 tools, 6 skills, writable workspace. The API
 key line may say `MISSING`; that is expected until step 1.
 
 ## 1. Configure the key
@@ -46,7 +46,7 @@ timeout means the network or base URL is wrong.
 Open <http://127.0.0.1:8080>. The top-right key pill should say `key ready`.
 The empty state shows:
 
-- 12 built-in tools
+- 13 built-in tools
 - 6 discovered skills
 - 10 phases per turn
 - 1 isolated workspace per run

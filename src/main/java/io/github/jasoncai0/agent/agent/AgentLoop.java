@@ -125,6 +125,7 @@ public final class AgentLoop {
             boolean completed = false;
             int totalToolCalls = 0;
             int noProgressTurns = 0;
+            boolean reflectionRequested = false;
             int cycle = 1;
             while (true) {
                 if (settings.maxSteps() > 0 && cycle > settings.maxSteps()) {
@@ -226,19 +227,38 @@ public final class AgentLoop {
                             || (!verifiedBefore && context.verified());
                     if (madeProgress) {
                         noProgressTurns = 0;
+                        reflectionRequested = false;
                     } else {
                         noProgressTurns++;
+                        if (noProgressTurns >= ReflectionPolicy.REFLECT_AFTER && !reflectionRequested) {
+                            reflectionRequested = true;
+                            String prompt = ReflectionPolicy.prompt(noProgressTurns, result.toolCalls().size());
+                            messages.add(ChatMessage.user(prompt));
+                            log.emit("reflection.requested", eventMap(
+                                    "message", prompt,
+                                    "noProgressTurns", noProgressTurns,
+                                    "threshold", ReflectionPolicy.REFLECT_AFTER,
+                                    "usage", state.usage()));
+                        }
+                        if (noProgressTurns >= ReflectionPolicy.STALL_AFTER) {
+                            String message = ReflectionPolicy.stallMessage(noProgressTurns);
+                            state.loopDetected(message);
+                            log.emit("loop.detected", eventMap(
+                                    "message", message,
+                                    "reason", "no_progress",
+                                    "noProgressTurns", noProgressTurns,
+                                    "usage", state.usage()));
+                            break;
+                        }
                     }
-                    if (noProgressTurns >= 20) {
-                        String message = "Stopped: 20 consecutive tool turns made no workspace change "
-                                + "and produced no new verification. The no-progress guard treats this "
-                                + "as a stall; the workspace and transcript are preserved.";
-                        state.loopDetected(message);
-                        log.emit("loop.detected", eventMap(
-                                "message", message,
-                                "noProgressTurns", noProgressTurns,
-                                "usage", state.usage()));
-                        break;
+                    for (ToolCall call : result.toolCalls()) {
+                        if ("reflect".equals(call.name())) {
+                            RunArtifacts.appendReflection(workspace, state.id(), cycle, call.arguments());
+                            log.emit("reflection.recorded", eventMap(
+                                    "step", cycle,
+                                    "arguments", truncate(call.arguments(), 16_000),
+                                    "usage", state.usage()));
+                        }
                     }
                 }
 
@@ -514,6 +534,9 @@ public final class AgentLoop {
                   automatically; pass language=java/python/javascript/go when you need to be explicit.
                 - compile_java and run_java remain available as Java-only aliases. Use run_command for tests
                   such as `mvn test`, `pytest`, or `go test ./...`.
+                - If you are stuck or repeating the same inspection, call `reflect` with diagnosis,
+                  evidence, attempts, one next_action, and should_stop. Do not keep slicing the same file
+                  with different line ranges. The framework asks for reflection after repeated no-progress turns.
                 - Before your final answer, the framework automatically verifies the workspace if any source
                   changed. If verification fails, the failure is fed back to you. Fix it, then finish.
                 - If an installed skill is relevant, load it with load_skill. Skills are instructions, not tools.
