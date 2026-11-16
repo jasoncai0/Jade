@@ -320,7 +320,9 @@ truth for the UI and the transcript; events are replayed from sequence number
 handle.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the loop pseudocode,
-failure paths, event model, and design trade-offs.
+failure paths, event model, and design trade-offs. The development retrospective
+is in [docs/RETROSPECTIVE.md](docs/RETROSPECTIVE.md); the public version is
+[the coding-agent pitfalls article](https://www.jasoncai.site/posts/coding-agent-pitfalls.html).
 
 ## HTTP API
 

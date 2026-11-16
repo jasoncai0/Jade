@@ -12,7 +12,8 @@
 | 线上地址 | https://www.jasoncai.site/posts/coding-agent-pitfalls.html |
 | 博客源码 | `~/Documents/deepseek-harness/default-workspace/blog/content/posts/coding-agent-pitfalls/` |
 | 标签 | `harness`, `codegen`, `architecture` |
-| 发布状态 | 已发布（2026-11-15 23:14） |
+| 发布状态 | 已发布（2026-11-16 14:32） |
+| 项目复盘 | `docs/RETROSPECTIVE.md` |
 
 ## 踩坑账本
 
@@ -45,6 +46,7 @@
 | 2026-11-15 23:14 | 补充默认沙箱导致本地服务起不来 | 线上 200，4.1 节可见 | blog commit `487138a`；备份 `/home/ubuntu/backups/blog-20261115-231355` |
 | 2026-11-16 13:24 | 补充默认取消轮次上限 | 线上 200，2 节更新可见 | blog commit `c8d2c3a`；备份 `/home/ubuntu/backups/blog-20261116-132408` |
 | 2026-11-16 13:41 | 说明 token 预算默认关闭 | 线上 200，2 节更新可见 | blog commit `195f831`；备份 `/home/ubuntu/backups/blog-20261116-134125` |
+| 2026-11-16 14:32 | 增加最终经验复盘与六个设计判断 | 线上 200，11 节可见 | blog commit `0b0b068`；备份 `/home/ubuntu/backups/blog-20261116-143212` |
 
 ## 待办
 
