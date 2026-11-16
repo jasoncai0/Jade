@@ -12,7 +12,7 @@
 | 线上地址 | https://www.jasoncai.site/posts/coding-agent-pitfalls.html |
 | 博客源码 | `~/Documents/deepseek-harness/default-workspace/blog/content/posts/coding-agent-pitfalls/` |
 | 标签 | `harness`, `codegen`, `architecture` |
-| 发布状态 | 已发布（2026-11-16 16:24） |
+| 发布状态 | 已发布（2026-11-16 17:43） |
 | 项目复盘 | `docs/RETROSPECTIVE.md` |
 
 ## 踩坑账本
@@ -39,6 +39,7 @@
 | 17 | 2026-11-16 | 命令形状循环绕过 | `javap` 只改 `sed -n '60,80p'`/`'80,100p'`，20 轮无进展护栏前已烧 96 MB events | 完整参数指纹不同；数字变化不归一；无反思请求 | 8 轮注入 reflection 检查点；16 轮停止；`run_command` 形状归一化（数字→`#`），10 次窗口 8 次停止；新增 `reflect` 工具 | 2 |
 | 18 | 2026-11-16 | 长会话历史 | 96 MB / 12,786 事件的失败会话加载卡死；分页后 FAILED 变 RUNNING、token 回跳 | 启动即读全量 events；浏览器从 seq 0 重放全部事件；历史事件改写当前状态 | MySQL 存 snapshot+events；compact 分页 150；完整 body 按 seq 懒取；分页后重放 snapshot；改用已加载事件计数 | 8.3 |
 | 19 | 2026-11-16 | 一次性 CLI | 产物和最终回答都已完成，CLI 仍挂 9 分钟；主线程停在 `RunEventLog.awaitAfter` | 为支持连续会话，`run.finished` 不再关闭事件日志；CLI 只等 `closed()`，不知道当前 run 已终止 | CLI 在已消费完事件且快照 terminal 时退出；补 `goal.review` 输出。连续会话/服务端仍保持日志打开 | 8.1 |
+| 20 | 2026-11-16 | 上下文压缩 | 超预算但只剩三组时，截断结果被丢弃；旧对话被硬删，模型重复劳动 | `compacted` 只看 `removed > 0`；无 token 预算、无 pinned memory、无工具输出微压缩、无模型摘要 | token+字符双预算；system/首任务/最新用户组钉住；tool result 头尾压缩；旧组经无工具模型摘要回插；摘要失败退化说明；补截断生效测试 | 8.4 |
 
 ## 发布记录
 
@@ -55,6 +56,7 @@
 | 2026-11-16 14:32 | 增加最终经验复盘与六个设计判断 | 线上 200，11 节可见 | blog commit `0b0b068`；备份 `/home/ubuntu/backups/blog-20261116-143212` |
 
 | 2026-11-16 16:24 | 补充长会话历史分页坑 | 线上 200，8.3 节可见 | blog commit `0ef478c`；基线 `b3aa363`；备份 `/home/ubuntu/backups/blog-20261116-162416` |
+| 2026-11-16 17:43 | 补充上下文压缩管线 | 线上 200，8.4 节可见 | blog commit `9e8056d`；基线更新；备份 `/home/ubuntu/backups/blog-20261116-174350` |
 
 ## 待办
 
