@@ -1,6 +1,6 @@
 # Jade 开发复盘：从“能跑”到“可交付”
 
-> 项目：`jasoncai0/java-coding-agent`（私有仓库）
+> 项目：[`jasoncai0/Jade`](https://github.com/jasoncai0/Jade)（公开仓库）
 > 周期：2026-11-13 至 2026-11-16
 > 对应公开文章：<https://www.jasoncai.site/posts/coding-agent-pitfalls.html>
 

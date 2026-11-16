@@ -1,5 +1,7 @@
 # Jade — a local coding agent
 
+Repository: <https://github.com/jasoncai0/Jade>
+
 Jade is a small, runnable coding agent written in Java. It calls the DeepSeek
 chat-completions API, runs locally, and works on real files. A run can create a
 Java, Python, JavaScript, or Go project, compile or syntax-check it with the real
