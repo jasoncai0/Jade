@@ -323,6 +323,7 @@ phase, tool, and model-call boundaries.
 | User cancel | interruption, `CANCELLED`, transcript preserved |
 | Turn cap reached (positive cap) | `MAX_STEPS`, transcript/workspace preserved |
 | Repeated identical tool calls | `LOOP_DETECTED`, blocked calls get tool errors, transcript preserved |
+| 20 tool turns with no file change and no new verification | `LOOP_DETECTED`, no-progress guard; transcript preserved |
 | Session token budget exhausted | `BUDGET_EXCEEDED`, transcript preserved |
 | Artifact write failure | warning; run still returns its snapshot |
 

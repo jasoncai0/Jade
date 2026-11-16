@@ -175,6 +175,25 @@ class AgentLoopTest {
                 .anyMatch(event -> event.type().equals("loop.detected")));
     }
 
+
+    @Test
+    void variedToolCallsWithoutWorkspaceProgressStopAtNoProgressLimit() throws Exception {
+        ScriptedLlm llm = new ScriptedLlm();
+        for (int i = 0; i < 21; i++) {
+            llm.script.add(toolResult("call-stall-" + i, "list_files", Map.of("path", "missing-" + i)));
+        }
+
+        Harness harness = harness(llm, settings(0, 0));
+        RunSnapshot snapshot = harness.loop.run("Keep looking without changing anything",
+                harness.workspace, harness.state, harness.events, harness.control);
+
+        assertEquals("LOOP_DETECTED", snapshot.status());
+        assertTrue(snapshot.error().contains("20 consecutive"), snapshot.error());
+        assertEquals(20, llm.requests.size());
+        assertTrue(harness.events.snapshot().stream()
+                .anyMatch(event -> event.type().equals("loop.detected")));
+    }
+
     @Test
     void tokenBudgetStopsRunBeforeAnotherModelTurn() throws Exception {
         ScriptedLlm llm = new ScriptedLlm();

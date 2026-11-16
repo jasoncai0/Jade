@@ -34,6 +34,7 @@
 | 13 | 2026-11-15 | 权限 UI | 后端 `WAITING_APPROVAL`、API 有 pending，页面看不到审批按钮 | 卡片 append 在 Live Trace 滚动区末尾；prepend 后仍可能落在 950px 视口下方 | 卡片移出时间线，挂到 `document.body`，固定底部 overlay；刷新补拉 pending | 8.2 |
 | 14 | 2026-11-15 | 沙箱默认 | Spring Boot 已生成并通过测试，启动仍 `SocketException: Operation not permitted`；`/health` HTTP 000 | `AGENT_SANDBOX=auto` 默认开启写监狱，`AGENT_SANDBOX_NETWORK=0` 在进程创建时锁死网络；Maven 缓存/JVM temp 也受写限制 | 默认改 `off` 本地直接执行；需要隔离时显式 `auto`/`required`；同一 Spring Boot 会话复跑，8080 `/health` 200 | 4.1 |
 | 15 | 2026-11-16 | 长任务轮次 | 10/30 轮上限会截断已经完成的长任务，也会把“没写完最终回答”误判成失败 | 用固定模型轮数当唯一护栏，无法区分正常长任务和失控循环 | 默认 `AGENT_MAX_STEPS=0` 不限制轮数；累计 token 预算默认 0（可选，正数才硬停）和同名同参数连续 4 次的 `ToolLoopGuard` 兜底；正数上限保留 | 2 |
+| 16 | 2026-11-16 | 长任务失控 | 取消默认预算后，旧会话连续 15 分钟、641 步翻 `javap` 字节码；96 MB events；Jade 被 SIGKILL | 重复检测只比完整参数，`sed -n 60,80`/`80,100` 每轮不同；token 预算为 0；没有“无文件变化”判据 | 增加 20 轮无进展护栏：文件列表未变且无新验证即 `LOOP_DETECTED`；不恢复 token 预算 | 2 |
 
 ## 发布记录
 

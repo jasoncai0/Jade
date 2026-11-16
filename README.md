@@ -91,9 +91,10 @@ positive value remains an optional explicit cap (up to 10000). Long runs are
 bounded by a repeated-call guard and, optionally, a token budget. The budget
 (`AGENT_TOKEN_BUDGET`) defaults to `0` = unlimited; set a positive value only
 for unattended runs that need a hard cost ceiling. A loop guard stops four
-identical tool calls with the same arguments. A guard stop is `LOOP_DETECTED`
-or `BUDGET_EXCEEDED`; the workspace and transcript remain available for a
-follow-up. Ten phases still describe exactly one model turn.
+identical tool calls with the same arguments, or 20 consecutive tool turns
+that change no workspace file and produce no new verification. A guard stop is
+`LOOP_DETECTED` or `BUDGET_EXCEEDED`; the workspace and transcript remain
+available for a follow-up. Ten phases still describe exactly one model turn.
 
 ### Session history and follow-ups
 
@@ -442,7 +443,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 52 tests:
+The suite has 53 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -455,8 +456,8 @@ The suite has 52 tests:
   generic tools
 - the full agent loop with a scripted model: real `javac`, `run_java`, a Python
   `run_code` path, Go build/run, and a compile-failure repair cycle
-- unbounded-turn completion, four-repeat loop detection, token-budget stop, and
-  an explicit positive turn cap
+- unbounded-turn completion, four-repeat loop detection, 20-turn no-progress
+  detection, token-budget stop, and an explicit positive turn cap
 - command sandbox write denial and SDK-directory exclusion
 - HTTP API and SSE replay against a real local server and a fake model
 - restart retention: a finished run is reloaded with its events, transcript, and files;

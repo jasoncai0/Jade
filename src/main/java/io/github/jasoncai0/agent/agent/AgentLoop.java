@@ -124,6 +124,7 @@ public final class AgentLoop {
         try {
             boolean completed = false;
             int totalToolCalls = 0;
+            int noProgressTurns = 0;
             int cycle = 1;
             while (true) {
                 if (settings.maxSteps() > 0 && cycle > settings.maxSteps()) {
@@ -140,6 +141,8 @@ public final class AgentLoop {
                             "usage", state.usage()));
                     break;
                 }
+                List<String> filesBefore = List.copyOf(state.files());
+                boolean verifiedBefore = context.verified();
                 phase(state, log, AgentPhase.INTAKE, cycle,
                         "run " + state.id() + ", task " + task.length() + " chars");
                 phase(state, log, AgentPhase.CONTEXT, cycle,
@@ -219,6 +222,24 @@ public final class AgentLoop {
                     }
                     totalToolCalls += result.toolCalls().size();
                     executeTools(result.toolCalls(), messages, context, state, log, control, stats, permissions);
+                    boolean madeProgress = !state.files().equals(filesBefore)
+                            || (!verifiedBefore && context.verified());
+                    if (madeProgress) {
+                        noProgressTurns = 0;
+                    } else {
+                        noProgressTurns++;
+                    }
+                    if (noProgressTurns >= 20) {
+                        String message = "Stopped: 20 consecutive tool turns made no workspace change "
+                                + "and produced no new verification. The no-progress guard treats this "
+                                + "as a stall; the workspace and transcript are preserved.";
+                        state.loopDetected(message);
+                        log.emit("loop.detected", eventMap(
+                                "message", message,
+                                "noProgressTurns", noProgressTurns,
+                                "usage", state.usage()));
+                        break;
+                    }
                 }
 
                 phase(state, log, AgentPhase.OBSERVE, cycle,
