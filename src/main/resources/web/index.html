@@ -138,7 +138,7 @@
         <div class="card-head">
           <div>
             <div class="eyebrow"><span class="eyebrow-line"></span>Ten-phase loop</div>
-            <p class="card-sub">Every model turn runs the whole pipeline. Turns are unbounded by default; repeated calls and the token budget act as guardrails.</p>
+            <p class="card-sub">Every model turn runs the whole pipeline. Turns are unbounded by default; repeated calls act as a guardrail, and an optional token budget can cap unattended runs.</p>
           </div>
           <div class="turn-readout" id="turnReadout">Turn 0 / ∞</div>
         </div>
@@ -214,7 +214,8 @@
       <div class="runtime-row"><span>Languages</span><span>Java · Python · JS · Go</span></div>
       <div class="runtime-row"><span>Discovery</span><span>ServiceLoader</span></div>
       <div class="runtime-row"><span>Skills</span><span>SKILL.md</span></div>
-      <div class="runtime-row"><span>Isolation</span><span>per-run dir + OS jail</span></div>
+      <div class="runtime-row"><span>Isolation</span><span>per-run dir · local</span></div>
+      <div class="runtime-row"><span>Budget</span><span id="budgetMode">unlimited</span></div>
       <div class="runtime-row"><span>Transport</span><span>SSE</span></div>
     </section>
   </aside>

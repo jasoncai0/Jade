@@ -88,8 +88,9 @@ Every model turn executes these ten phases, in order:
 
 There is no default model-turn cap: `AGENT_MAX_STEPS=0` means unlimited. A
 positive value remains an optional explicit cap (up to 10000). Long runs are
-bounded by two safety mechanisms instead of a turn counter: a token budget
-(`AGENT_TOKEN_BUDGET`, default 2,000,000) and a loop guard that stops four
+bounded by a repeated-call guard and, optionally, a token budget. The budget
+(`AGENT_TOKEN_BUDGET`) defaults to `0` = unlimited; set a positive value only
+for unattended runs that need a hard cost ceiling. A loop guard stops four
 identical tool calls with the same arguments. A guard stop is `LOOP_DETECTED`
 or `BUDGET_EXCEEDED`; the workspace and transcript remain available for a
 follow-up. Ten phases still describe exactly one model turn.
@@ -422,7 +423,7 @@ Environment variables take precedence over `.env`:
 | `DEEPSEEK_MAX_OUTPUT_TOKENS` | `8192` | response token cap |
 | `AGENT_MAX_STEPS` | `0` | model turns per run; `0` = unlimited |
 | `AGENT_MAX_TOOL_CALLS_PER_STEP` | `8` | executed calls per turn |
-| `AGENT_TOKEN_BUDGET` | `2000000` | cumulative session token budget; `0` = unlimited |
+| `AGENT_TOKEN_BUDGET` | `0` | optional cumulative session token budget; `0` = unlimited |
 | `AGENT_CONTEXT_CHAR_BUDGET` | `120000` | compaction budget |
 | `AGENT_COMMAND_TIMEOUT_SECONDS` | `120` | default command timeout |
 | `AGENT_AUTO_VERIFY` | `true` | compile gate before final answer |

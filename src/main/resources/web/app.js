@@ -150,6 +150,8 @@ function applyConfig(config) {
     state.maxSteps = Number(config.maxSteps) || 0;
     $('runTurn').textContent = `0 / ${maxLabel()}`;
   }
+  const budget = Number(config.tokenBudget) || 0;
+  $('budgetMode').textContent = budget > 0 ? `${budget.toLocaleString()} tokens` : 'unlimited';
 }
 
 function toast(message, isError = false) {

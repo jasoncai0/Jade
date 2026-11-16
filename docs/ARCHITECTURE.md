@@ -54,7 +54,9 @@ The phrase "ten step loop" is represented at two levels:
    `checkpoint` phase events, in that order.
 2. **No default number-of-turns cap.** `AgentSettings.maxSteps == 0` means
    unlimited; a positive value is an optional explicit cap (up to 10000). The
-   session token budget and repeated-call guard are the long-run safety nets.
+   session token budget (optional, unlimited by default) and repeated-call
+   guard are the long-run safety nets. Use a positive budget only for
+   unattended runs; interactive long tasks rely on compaction and cancel.
 
 The model only participates in `model` and `tools`. The framework owns the rest
 so that verification, compaction, and persistence cannot be skipped by a model
@@ -67,7 +69,7 @@ state.markRunning()
 messages = [system(prompt + skill catalog + selected skills), user(task + tree)]
 for turn in 1..∞ (or 1..maxSteps when a positive cap is configured):
     emit intake/context/skills/plan
-    if token_budget > 0 and usage.total >= token_budget: stop BUDGET_EXCEEDED
+    if token_budget > 0 and usage.total >= token_budget: stop BUDGET_EXCEEDED  # optional
     result = llm.chat(messages, toolSpecs, temperature=0.2)
     add assistant(result); emit usage/assistant
     emit tools

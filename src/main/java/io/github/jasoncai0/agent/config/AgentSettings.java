@@ -14,7 +14,7 @@ public record AgentSettings(
     /** 0 means unlimited; positive values remain an optional explicit cap. */
     public static final int HARD_MAX_STEPS = 10_000;
     public static final int HARD_MAX_TOOL_CALLS_PER_STEP = 20;
-    public static final long DEFAULT_TOKEN_BUDGET = 2_000_000L;
+    public static final long DEFAULT_TOKEN_BUDGET = 0L;
 
     /** Compatibility constructor for tests and embedders: no interactive approver, no token budget. */
     public AgentSettings(int maxSteps, int maxToolCallsPerStep, int contextCharBudget,
