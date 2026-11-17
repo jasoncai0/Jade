@@ -280,7 +280,7 @@ needed. When a Go workspace has no `go.mod`, Jade creates a minimal module
 
 ### Tools
 
-Fourteen built-in tools are registered at startup:
+Fifteen built-in tools are registered at startup:
 
 | Tool | Purpose |
 |------|---------|
@@ -298,6 +298,7 @@ Fourteen built-in tools are registered at startup:
 | `load_skill` | Load a full skill playbook on demand |
 | `reflect` | Record a structured diagnosis, evidence, attempts, next action, and stop decision |
 | `ask_user` | Ask for a single/multiple choice or free-text decision and wait for the user |
+| `read_tool_output` | Read a spilled tool output by path and character window |
 
 `ToolRegistry` also discovers external tools through `ServiceLoader`. See
 [Extending Jade](#extending-jade).

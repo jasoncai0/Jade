@@ -138,7 +138,7 @@ cannot reuse a stale compile.
 
 There are two layers:
 
-1. **Static registration.** `BuiltInTools.all()` returns the twelve built-ins.
+1. **Static registration.** `BuiltInTools.all()` returns the fifteen built-ins.
    `BuiltInTools.registry()` registers each one and then calls
    `ToolRegistry.discover(...)`.
 2. **ServiceLoader discovery.** `ToolRegistry.discover` loads every
