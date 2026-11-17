@@ -17,6 +17,7 @@ public final class AgentRun {
     private final Workspace workspace;
     private final RunState state;
     private final RunEventLog events;
+    private final LiveDeltaBus deltas = new LiveDeltaBus();
     private final PermissionBroker permissions = new PermissionBroker();
     private final PermissionSession permissionSession = new PermissionSession();
     private final QuestionBroker questions = new QuestionBroker();
@@ -48,6 +49,7 @@ public final class AgentRun {
 
     public void finishTurn() {
         running.set(false);
+        deltas.finish();
     }
 
     public boolean running() {
@@ -68,6 +70,11 @@ public final class AgentRun {
 
     public RunEventLog events() {
         return events;
+    }
+
+    /** Live, non-durable assistant deltas for the turn currently running. */
+    public LiveDeltaBus deltas() {
+        return deltas;
     }
 
     public PermissionBroker permissions() {

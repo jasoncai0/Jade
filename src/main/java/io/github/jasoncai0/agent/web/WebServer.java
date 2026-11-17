@@ -8,6 +8,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.github.jasoncai0.agent.agent.AgentEvent;
 import io.github.jasoncai0.agent.agent.AgentRun;
+import io.github.jasoncai0.agent.agent.LiveDeltaBus;
 import io.github.jasoncai0.agent.agent.AgentService;
 import io.github.jasoncai0.agent.agent.AgentEvent;
 import io.github.jasoncai0.agent.history.EventStore;
@@ -38,6 +39,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -48,6 +52,7 @@ import java.util.concurrent.TimeUnit;
  */
 public final class WebServer implements AutoCloseable {
     private static final int MAX_BODY_BYTES = 1024 * 1024;
+    private static final long KEEP_ALIVE_MS = 15_000;
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final AgentService agentService;
@@ -396,41 +401,85 @@ public final class WebServer implements AutoCloseable {
         headers.set("X-Accel-Buffering", "no");
         exchange.sendResponseHeaders(200, 0);
         OutputStream out = exchange.getResponseBody();
+
+        // Deltas are not replayed: a reconnect starts from the current head and
+        // the durable assistant event will arrive with the final content.
+        long lastEventSeq = after;
+        long lastDeltaSeq = run.deltas().lastSeq();
+        BlockingQueue<Boolean> wakeups = new ArrayBlockingQueue<>(1);
+        Runnable wakeup = () -> wakeups.offer(Boolean.TRUE);
+        run.events().subscribe(wakeup);
+        run.deltas().subscribe(wakeup);
+        long lastWrite = System.currentTimeMillis();
         try {
             writeSse(out, "retry: 2000\n\n");
             while (true) {
-                List<AgentEvent> batch = run.events().after(after);
-                if (!batch.isEmpty()) {
-                    for (AgentEvent event : batch) {
-                        writeSse(out, formatEvent(event));
-                        after = event.seq();
-                    }
-                    continue;
+                long beforeDeltas = lastDeltaSeq;
+                lastDeltaSeq = drainDeltas(out, run, lastDeltaSeq, wakeups);
+                boolean wrote = lastDeltaSeq != beforeDeltas;
+                List<AgentEvent> batch = run.events().after(lastEventSeq);
+                for (AgentEvent event : batch) {
+                    writeSse(out, formatEvent(event));
+                    lastEventSeq = event.seq();
+                }
+                wrote = wrote || !batch.isEmpty();
+                long now = System.currentTimeMillis();
+                if (wrote) {
+                    lastWrite = now;
                 }
                 if (run.events().closed()) {
                     writeSse(out, "event: stream_end\ndata: {\"closed\":true}\n\n");
                     break;
                 }
-                AgentEvent next;
+                if (now - lastWrite >= KEEP_ALIVE_MS) {
+                    writeSse(out, ": keep-alive\n\n");
+                    lastWrite = now;
+                }
                 try {
-                    next = run.events().awaitAfter(after, 15_000);
+                    wakeups.poll(1, TimeUnit.SECONDS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
-                }
-                if (next == null) {
-                    writeSse(out, ": keep-alive\n\n");
                 }
             }
         } catch (IOException e) {
             Log.info("web.sse_disconnected", Map.of("runId", id));
         } finally {
+            run.events().unsubscribe(wakeup);
+            run.deltas().unsubscribe(wakeup);
             try {
                 out.close();
             } catch (IOException ignored) {
                 // client is gone
             }
         }
+    }
+
+    /** Writes pending deltas and returns the newest seq written. */
+    private long drainDeltas(OutputStream out, AgentRun run, long lastDeltaSeq,
+                             BlockingQueue<Boolean> wakeups) throws IOException {
+        List<LiveDeltaBus.Delta> deltas = run.deltas().after(lastDeltaSeq);
+        long seq = lastDeltaSeq;
+        for (LiveDeltaBus.Delta delta : deltas) {
+            writeSse(out, formatDelta(delta));
+            seq = delta.seq();
+        }
+        if (!deltas.isEmpty()) {
+            // More may have arrived while writing; do not wait for a fresh signal.
+            wakeups.offer(Boolean.TRUE);
+        }
+        return seq;
+    }
+
+    private String formatDelta(LiveDeltaBus.Delta delta) throws IOException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "assistant.delta");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("text", delta.text());
+        data.put("reasoning", delta.reasoning());
+        payload.put("data", data);
+        // No SSE id: deltas are not replayable and must not become Last-Event-ID.
+        return "event: assistant.delta\ndata: " + mapper.writeValueAsString(payload) + "\n\n";
     }
 
     private String formatEvent(AgentEvent event) throws IOException {

@@ -6,9 +6,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public final class RunEventLog {
     private final List<AgentEvent> events = new ArrayList<>();
+    private final List<Runnable> wakeups = new CopyOnWriteArrayList<>();
     private final String runId;
     private final EventStore store;
     private long nextSeq = 1;
@@ -51,14 +53,31 @@ public final class RunEventLog {
         return log;
     }
 
-    public synchronized AgentEvent emit(String type, Map<String, Object> data) {
-        AgentEvent event = new AgentEvent(nextSeq++, System.currentTimeMillis(), type, data == null ? Map.of() : Map.copyOf(data));
-        events.add(event);
-        if (store != null && runId != null) {
-            store.append(runId, event);
+    public AgentEvent emit(String type, Map<String, Object> data) {
+        AgentEvent event;
+        synchronized (this) {
+            event = new AgentEvent(nextSeq++, System.currentTimeMillis(), type,
+                    data == null ? Map.of() : Map.copyOf(data));
+            events.add(event);
+            if (store != null && runId != null) {
+                store.append(runId, event);
+            }
+            notifyAll();
         }
-        notifyAll();
+        // Listeners run outside the lock: they only push a wake-up signal.
+        for (Runnable wakeup : wakeups) {
+            wakeup.run();
+        }
         return event;
+    }
+
+    /** Registers a cheap callback fired after every emit, outside the lock. */
+    public void subscribe(Runnable wakeup) {
+        wakeups.add(wakeup);
+    }
+
+    public void unsubscribe(Runnable wakeup) {
+        wakeups.remove(wakeup);
     }
 
     public synchronized List<AgentEvent> snapshot() {
@@ -91,9 +110,14 @@ public final class RunEventLog {
         return closed;
     }
 
-    public synchronized void close() {
-        closed = true;
-        notifyAll();
+    public void close() {
+        synchronized (this) {
+            closed = true;
+            notifyAll();
+        }
+        for (Runnable wakeup : wakeups) {
+            wakeup.run();
+        }
     }
 
     /** Reopens a restored log when the user continues a saved session. */

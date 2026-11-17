@@ -227,7 +227,8 @@ public final class AgentService implements AutoCloseable {
         try {
             AgentLoop loop = new AgentLoop(
                     llm, tools, skills, config.agent(), config.llm().maxOutputTokens(),
-                    new Verifier(), run.permissions(), run.permissionSession(), run.questions());
+                    new Verifier(), run.permissions(), run.permissionSession(), run.questions())
+                    .withLiveDeltas(run.deltas());
             RunSnapshot snapshot = continuation
                     ? loop.continueSession(userMessage, RunArtifacts.loadMessages(workspace.root()),
                             workspace, state, events, control)

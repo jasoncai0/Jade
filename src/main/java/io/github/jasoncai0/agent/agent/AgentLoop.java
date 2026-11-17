@@ -49,6 +49,8 @@ public final class AgentLoop {
     private final GoalReviewer goalReviewer;
     private final ContextCompactor compactor = new ContextCompactor();
     private final ToolLoopGuard loopGuard = new ToolLoopGuard();
+    /** Live delta sink; null means nobody is watching, so deltas are dropped. */
+    private volatile LiveDeltaBus liveDeltas;
 
     public AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
                      AgentSettings settings, int maxOutputTokens) {
@@ -91,6 +93,123 @@ public final class AgentLoop {
         this.permissionSession = permissionSession == null ? new PermissionSession() : permissionSession;
         this.questionBroker = questionBroker == null ? new QuestionBroker() : questionBroker;
         this.goalReviewer = goalReviewer == null ? GoalReviewer.NOOP : goalReviewer;
+    }
+
+    /** Routes streaming deltas to a live bus (browser SSE). Optional. */
+    public AgentLoop withLiveDeltas(LiveDeltaBus bus) {
+        this.liveDeltas = bus;
+        return this;
+    }
+
+    /**
+     * Streams one model request. Deltas are advisory: on failure they are
+     * discarded, so a half-streamed answer never looks complete.
+     */
+    private ChatResult streamModel(ChatRequest request) {
+        LiveDeltaBus bus = liveDeltas;
+        if (bus == null) {
+            return llm.stream(request, LlmClient.StreamListener.noop());
+        }
+        DeltaThrottle throttle = new DeltaThrottle(bus);
+        ChatResult result;
+        try {
+            result = llm.stream(request, throttle);
+        } catch (RuntimeException e) {
+            throttle.discard();
+            bus.finish();
+            throw e;
+        }
+        throttle.flush();
+        bus.finish();
+        return result;
+    }
+
+    /**
+     * Coalesces token deltas into chunks before they hit the SSE connection:
+     * at most one frame per {@value #DELTA_INTERVAL_MS} ms or per
+     * {@value #DELTA_CHUNK_CHARS} characters, whichever comes first.
+     */
+    private static final class DeltaThrottle implements LlmClient.StreamListener {
+        private static final long DELTA_INTERVAL_MS = 50;
+        private static final int DELTA_CHUNK_CHARS = 512;
+
+        private final LiveDeltaBus bus;
+        private final StringBuilder text = new StringBuilder();
+        private final StringBuilder reasoning = new StringBuilder();
+        private long lastFlush = System.currentTimeMillis();
+
+        private DeltaThrottle(LiveDeltaBus bus) {
+            this.bus = bus;
+        }
+
+        @Override
+        public void onText(String delta) {
+            if (delta == null || delta.isEmpty()) {
+                return;
+            }
+            synchronized (this) {
+                text.append(delta);
+            }
+            maybeFlush();
+        }
+
+        @Override
+        public void onReasoning(String delta) {
+            if (delta == null || delta.isEmpty()) {
+                return;
+            }
+            synchronized (this) {
+                reasoning.append(delta);
+            }
+            maybeFlush();
+        }
+
+        @Override
+        public void onToolCallDelta(int index, String id, String name, String argumentsDelta) {
+            // Tool arguments are not rendered live; they land in the durable log.
+        }
+
+        @Override
+        public void onUsage(io.github.jasoncai0.agent.llm.Usage usage) {
+            // Usage lands in the durable log with the finished assistant message.
+        }
+
+        private void maybeFlush() {
+            long now = System.currentTimeMillis();
+            synchronized (this) {
+                int pending = text.length() + reasoning.length();
+                if (pending == 0) {
+                    return;
+                }
+                if (pending >= DELTA_CHUNK_CHARS || now - lastFlush >= DELTA_INTERVAL_MS) {
+                    flushLocked();
+                }
+            }
+        }
+
+        void flush() {
+            synchronized (this) {
+                flushLocked();
+            }
+        }
+
+        void discard() {
+            synchronized (this) {
+                text.setLength(0);
+                reasoning.setLength(0);
+            }
+        }
+
+        private void flushLocked() {
+            if (text.length() == 0 && reasoning.length() == 0) {
+                return;
+            }
+            bus.publish(text.length() == 0 ? "" : text.toString(),
+                    reasoning.length() == 0 ? null : reasoning.toString());
+            text.setLength(0);
+            reasoning.setLength(0);
+            lastFlush = System.currentTimeMillis();
+        }
     }
 
     public RunSnapshot run(String task, Workspace workspace, RunState state,
@@ -184,7 +303,7 @@ public final class AgentLoop {
                 phase(state, log, AgentPhase.MODEL, cycle,
                         "asking the model for the next action");
                 ChatRequest request = new ChatRequest(messages, tools.specs(), 0.2, maxOutputTokens);
-                String requestBody = llm.requestBody(request);
+                String requestBody = llm.requestBody(request, true);
                 if (requestBody != null && !requestBody.isBlank()) {
                     log.emit("llm.request", eventMap(
                             "body", requestBody,
@@ -632,7 +751,7 @@ public final class AgentLoop {
         boolean recovered = false;
         while (true) {
             try {
-                return llm.chat(request);
+                return streamModel(request);
             } catch (LlmException e) {
                 if (control.isCancelled()) {
                     throw new RunControl.RunCancelledException();
@@ -673,7 +792,7 @@ public final class AgentLoop {
                         "summarized", recovery.summarized()
                 ));
                 request = new ChatRequest(messages, tools.specs(), 0.2, maxOutputTokens);
-                String body = llm.requestBody(request);
+                String body = llm.requestBody(request, true);
                 if (body != null && !body.isBlank()) {
                     log.emit("llm.request", eventMap(
                             "body", body,
