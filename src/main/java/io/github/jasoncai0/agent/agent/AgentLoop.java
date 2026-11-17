@@ -194,15 +194,7 @@ public final class AgentLoop {
                             "chars", requestBody.length()
                     ));
                 }
-                ChatResult result;
-                try {
-                    result = llm.chat(request);
-                } catch (LlmException e) {
-                    if (control.isCancelled()) {
-                        throw new RunControl.RunCancelledException();
-                    }
-                    throw e;
-                }
+                ChatResult result = requestModel(request, messages, state, log, control, cycle);
                 state.addUsage(result.usage());
                 log.emit("usage", eventMap("usage", state.usage()));
 
@@ -541,6 +533,72 @@ public final class AgentLoop {
                     "durationMs", duration
             ));
             context.refreshFiles();
+        }
+    }
+
+    /**
+     * Calls the model and, on a context-window rejection, compacts aggressively
+     * and retries exactly once. Any other failure keeps today's fail-fast path.
+     */
+    private ChatResult requestModel(ChatRequest request, List<ChatMessage> messages,
+                                    RunState state, RunEventLog log, RunControl control,
+                                    int cycle) {
+        boolean recovered = false;
+        while (true) {
+            try {
+                return llm.chat(request);
+            } catch (LlmException e) {
+                if (control.isCancelled()) {
+                    throw new RunControl.RunCancelledException();
+                }
+                if (!settings.overflowRecovery() || !e.isContextOverflow()) {
+                    throw e;
+                }
+                if (recovered) {
+                    throw new LlmException(e.getMessage()
+                            + " Context still exceeds the model window after one compaction; "
+                            + "reduce the task or start a new session.",
+                            e.statusCode(), e.code(), e);
+                }
+                recovered = true;
+                int beforeChars = compactor.chars(messages);
+                int beforeTokens = compactor.tokens(messages);
+                log.emit("context.overflow", eventMap(
+                        "step", cycle,
+                        "message", e.getMessage(),
+                        "code", e.code(),
+                        "beforeChars", beforeChars,
+                        "beforeTokens", beforeTokens
+                ));
+                ContextCompactor.Result recovery = compactor.compactForOverflow(
+                        messages, new LlmContextSummarizer(llm));
+                messages.clear();
+                messages.addAll(recovery.messages());
+                if (recovery.summaryUsage().totalTokens() > 0) {
+                    state.addUsage(recovery.summaryUsage());
+                }
+                log.emit("context.compacted", eventMap(
+                        "removed", recovery.removed(),
+                        "microCompacted", recovery.microCompacted(),
+                        "truncated", recovery.truncated(),
+                        "beforeTokens", recovery.beforeTokens(),
+                        "afterTokens", recovery.afterTokens(),
+                        "summaryTokens", recovery.summaryUsage().totalTokens(),
+                        "summarized", recovery.summarized()
+                ));
+                request = new ChatRequest(messages, tools.specs(), 0.2, maxOutputTokens);
+                String body = llm.requestBody(request);
+                if (body != null && !body.isBlank()) {
+                    log.emit("llm.request", eventMap(
+                            "body", body,
+                            "step", cycle,
+                            "messages", request.messages().size(),
+                            "tools", request.tools().size(),
+                            "chars", body.length(),
+                            "recovery", true
+                    ));
+                }
+            }
         }
     }
 
