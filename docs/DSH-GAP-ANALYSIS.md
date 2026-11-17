@@ -246,8 +246,9 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 | 溢出错误码 + 压缩重试（P0-2） | 已完成，`context.overflow` / `context.compacted` 事件，`AGENT_OVERFLOW_RECOVERY=true` | `42a8755`、`90c888e`、`5a50abc` |
 | 并行只读工具（P0-3） | 已完成，`Tool.concurrencySafe()` + 有界池，写/命令仍独占 | `bb07831`、`a0214d3`、`b341ccb`、`9fc555f` |
 | 真流式输出（P1-1） | 已完成，SSE 解析 + `assistant.delta` 实时帧（不落库、不带 `id:`） | `1c49e2a`、`b4852ec`、`2d2644e` |
+| 会话 fork（P1-2） | 已完成，复制工作区/transcript/事件历史，`parentRunId` 记录血缘；fork 空闲等待首条消息 | `5d9977e` |
 
-矩阵第 6 行（真流式）与第 2 行（并行）现在描述的是历史缺口，不再是当前状态。仍然未做：会话 fork、子代理委派、MCP resources、跨平台沙箱、插件/预设体系。
+矩阵第 6、7 行（真流式、fork）与第 2 行（并行）现在描述的是历史缺口，不再是当前状态。仍然未做：子代理委派、MCP resources、跨平台沙箱、插件/预设体系。
 
 ## 9. 未验证/待补证据
 

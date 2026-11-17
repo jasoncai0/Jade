@@ -460,6 +460,15 @@ Only after Phase 1 review: 3 slices — (a) `LlmClient.stream` + `DeepSeekClient
 
 ## Task 4: Session fork (P1)
 
+**Status (2026-11-17): delivered in `5d9977e`.** 132 tests pass. Deviations from the design below:
+- No MySQL DDL: `parentRunId`/`forkSeq` live in the existing `jade_sessions.snapshot` JSON, so old rows deserialize with nulls and no migration is needed.
+- The endpoint returns `201` (created), not `200`.
+- The fork workspace suffix is 6 hex characters, not 8 (`<name>-fork-<6hex>`); the run id keeps `fork-<8hex>`.
+- Parent events are copied with `RunEventLog.append`, preserving `seq`/`timestamp`; the event payload's `id`/`runId`/`workspace` are rewritten recursively (including records such as `RunSnapshot`). `fork.created` also carries `task`.
+- Workspace copy additionally keeps `.agent/tool-results` (so spill references resolve) and skips `.agent` itself; the cap is 20,000 files / 200 MiB.
+- `RunArtifacts` persists and restores the lineage fields, and `normalize()` preserves them, so a follow-up after restart keeps `parentRunId`.
+- Tests are `AgentServiceForkTest`, `WorkspaceForkTest`, `WebServerForkTest` instead of `SessionForkTest`; the MySQL integration path remains untested without a live DB.
+
 **Goal:** Fork a completed run into an independent run with a copied transcript and workspace; the parent is untouched.
 
 **Design.**
@@ -593,7 +602,7 @@ DelegationResult start(AgentRun parent, String task, String name, int timeoutSec
 | 1 | Context safety net | — | 2 days | Correctness; unblocks long runs |
 | 2 | Parallel read-only tools | Task 1 touches `executeTools` | 1 day | Small, high latency win; avoid merge conflict by doing after Task 1 |
 | 3 | Streaming | — | 2.5 days | UX; independent of 1/2, but touches `AgentLoop` model call |
-| 4 | Session fork | — | 2 days | Adds `parent_run_id`, reused by Task 5 |
+| 4 | Session fork | — | 2 days | Delivered `5d9977e`; lineage in snapshot JSON, reused by Task 5 |
 | 5 | Subagent delegation | Tasks 1, 4 | 4 days | Biggest; needs the fork column + context safety |
 
 Total: ~11.5 engineering days, plus review. The first iteration is only Phase 1 (S1–S8, ~3 days); stop after S8 for review. Do not parallelize Tasks 1/2/3 on the same files; they all touch `AgentLoop.java`.
