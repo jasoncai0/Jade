@@ -21,11 +21,13 @@ public abstract class McpConnection implements AutoCloseable {
     public static final String DEFAULT_PROTOCOL = "2025-06-18";
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final int MAX_TOOLS = 200;
+    private static final int MAX_RESOURCES = 200;
 
     protected final McpServerConfig config;
     private final AtomicLong ids = new AtomicLong(1);
     protected volatile String protocolVersion = DEFAULT_PROTOCOL;
     protected volatile boolean initialized;
+    private volatile boolean resourcesSupported;
 
     protected McpConnection(McpServerConfig config) {
         this.config = config;
@@ -55,6 +57,8 @@ public abstract class McpConnection implements AutoCloseable {
         JsonNode result = call("initialize", params);
         String negotiated = result.path("protocolVersion").asText(DEFAULT_PROTOCOL);
         protocolVersion = negotiated == null || negotiated.isBlank() ? DEFAULT_PROTOCOL : negotiated;
+        JsonNode resources = result.path("capabilities").path("resources");
+        resourcesSupported = resources.isObject() || resources.asBoolean(false);
         onInitialized(protocolVersion);
 
         ObjectNode notification = JSON.createObjectNode();
@@ -100,6 +104,103 @@ public abstract class McpConnection implements AutoCloseable {
         params.set("arguments", JSON.valueToTree(arguments == null ? Map.of() : arguments));
         JsonNode result = call("tools/call", params);
         return parseCallResult(name, result);
+    }
+
+
+    /** True when the server advertised the MCP {@code resources} capability. */
+    public final boolean resourcesSupported() {
+        ensureInitialized();
+        return resourcesSupported;
+    }
+
+    public final List<McpResource> listResources() {
+        ensureInitialized();
+        List<McpResource> resources = new ArrayList<>();
+        String cursor = null;
+        do {
+            ObjectNode params = JSON.createObjectNode();
+            if (cursor != null && !cursor.isBlank()) {
+                params.put("cursor", cursor);
+            }
+            JsonNode result = call("resources/list", params);
+            JsonNode items = result.path("resources");
+            if (items.isArray()) {
+                for (JsonNode item : items) {
+                    if (resources.size() >= MAX_RESOURCES) {
+                        break;
+                    }
+                    String uri = item.path("uri").asText("").strip();
+                    if (uri.isEmpty()) {
+                        continue;
+                    }
+                    resources.add(new McpResource(
+                            uri,
+                            item.path("name").asText("").strip(),
+                            item.path("description").asText("").strip(),
+                            item.path("mimeType").asText("").strip()));
+                }
+            }
+            cursor = result.path("nextCursor").asText("");
+        } while (!cursor.isBlank() && resources.size() < MAX_RESOURCES);
+        return resources;
+    }
+
+    public final List<McpResourceTemplate> listResourceTemplates() {
+        ensureInitialized();
+        List<McpResourceTemplate> templates = new ArrayList<>();
+        String cursor = null;
+        do {
+            ObjectNode params = JSON.createObjectNode();
+            if (cursor != null && !cursor.isBlank()) {
+                params.put("cursor", cursor);
+            }
+            JsonNode result = call("resources/templates/list", params);
+            JsonNode items = result.path("resourceTemplates");
+            if (items.isArray()) {
+                for (JsonNode item : items) {
+                    if (templates.size() >= MAX_RESOURCES) {
+                        break;
+                    }
+                    String template = item.path("uriTemplate").asText("").strip();
+                    if (template.isEmpty()) {
+                        continue;
+                    }
+                    templates.add(new McpResourceTemplate(
+                            template,
+                            item.path("name").asText("").strip(),
+                            item.path("description").asText("").strip(),
+                            item.path("mimeType").asText("").strip()));
+                }
+            }
+            cursor = result.path("nextCursor").asText("");
+        } while (!cursor.isBlank() && templates.size() < MAX_RESOURCES);
+        return templates;
+    }
+
+    public final List<McpResourceContent> readResource(String uri) {
+        ensureInitialized();
+        if (uri == null || uri.isBlank()) {
+            throw new IllegalArgumentException("uri is required");
+        }
+        ObjectNode params = JSON.createObjectNode();
+        params.put("uri", uri.strip());
+        JsonNode result = call("resources/read", params);
+        List<McpResourceContent> contents = new ArrayList<>();
+        JsonNode items = result.path("contents");
+        if (items.isArray()) {
+            for (JsonNode item : items) {
+                String itemUri = item.path("uri").asText(uri);
+                String mime = item.path("mimeType").asText("");
+                String text = item.hasNonNull("text") ? item.path("text").asText("") : null;
+                boolean blob = text == null && item.hasNonNull("blob");
+                if (blob) {
+                    text = "[binary resource " + mime + ", base64 chars="
+                            + item.path("blob").asText("").length() + "]";
+                }
+                contents.add(new McpResourceContent(itemUri, mime, text == null ? "" : text, blob));
+            }
+        }
+        return contents;
     }
 
     protected final JsonNode call(String method, JsonNode params) {

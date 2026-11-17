@@ -58,6 +58,25 @@ public final class McpManager implements AutoCloseable {
                     registry.register(new McpTool(server, connection, definition, name));
                     serverTools++;
                 }
+                if (connection.resourcesSupported()) {
+                    int resourceTools = 0;
+                    for (McpResourceTool.Kind kind : McpResourceTool.Kind.values()) {
+                        String suffix = McpResourceTool.suffix(kind);
+                        int attempt = 1;
+                        String name = McpTool.toolName(server.name(), suffix, attempt);
+                        while (registry.find(name).isPresent() && attempt < 50) {
+                            attempt++;
+                            name = McpTool.toolName(server.name(), suffix, attempt);
+                        }
+                        if (registry.find(name).isPresent()) {
+                            continue;
+                        }
+                        registry.register(new McpResourceTool(server, connection, kind, name));
+                        resourceTools++;
+                    }
+                    serverTools += resourceTools;
+                    status.put("resourceTools", resourceTools);
+                }
                 manager.connections.add(connection);
                 manager.toolCount += serverTools;
                 status.put("connected", true);
