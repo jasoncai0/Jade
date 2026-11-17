@@ -12,6 +12,10 @@ import java.util.Map;
 /** Connects configured MCP servers, exposes their tools, and reports status. */
 public final class McpManager implements AutoCloseable {
     private final List<McpConnection> connections = new ArrayList<>();
+    private static final int HTTP_CONNECT_ATTEMPTS = 5;
+    private static final long HTTP_RETRY_INITIAL_MS = 500;
+    private static final long HTTP_RETRY_MAX_MS = 30_000;
+
     private final List<Map<String, Object>> serverStatus = new ArrayList<>();
     private int toolCount;
     private boolean configured;
@@ -40,10 +44,7 @@ public final class McpManager implements AutoCloseable {
                     manager.serverStatus.add(status);
                     continue;
                 }
-                connection = server.stdio()
-                        ? new StdioMcpConnection(server, projectRoot)
-                        : new HttpMcpConnection(server);
-                connection.initialize();
+                connection = connectWithRetry(server, projectRoot, status);
                 List<McpToolDefinition> definitions = connection.listTools();
                 for (McpToolDefinition definition : definitions) {
                     int attempt = 1;
@@ -99,6 +100,51 @@ public final class McpManager implements AutoCloseable {
             manager.serverStatus.add(status);
         }
         return manager;
+    }
+
+    private static McpConnection connectWithRetry(McpServerConfig server, Path projectRoot,
+                                                  Map<String, Object> status) {
+        int attempts = server.stdio() ? 1 : HTTP_CONNECT_ATTEMPTS;
+        long delay = HTTP_RETRY_INITIAL_MS;
+        RuntimeException last = null;
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+            McpConnection connection = server.stdio()
+                    ? new StdioMcpConnection(server, projectRoot)
+                    : new HttpMcpConnection(server);
+            try {
+                connection.initialize();
+                status.put("attempts", attempt);
+                return connection;
+            } catch (RuntimeException e) {
+                last = e;
+                connection.close();
+                status.put("attempts", attempt);
+                if (attempt == attempts || !retryable(e)) {
+                    throw e;
+                }
+                Log.warn("mcp.server.retry", Map.of(
+                        "server", server.name(),
+                        "attempt", attempt,
+                        "delayMs", delay,
+                        "error", String.valueOf(e.getMessage())));
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new McpException("MCP connect interrupted for '" + server.name() + "'", interrupted);
+                }
+                delay = Math.min(HTTP_RETRY_MAX_MS, delay * 2);
+            }
+        }
+        throw last == null ? new McpException("MCP connect failed for '" + server.name() + "'") : last;
+    }
+
+    private static boolean retryable(RuntimeException error) {
+        String message = String.valueOf(error.getMessage());
+        if (message.contains("Invalid MCP URL")) {
+            return false;
+        }
+        return !message.matches(".*HTTP 4\\d\\d.*");
     }
 
     public boolean configured() {
