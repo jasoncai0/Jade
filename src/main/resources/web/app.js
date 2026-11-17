@@ -155,6 +155,12 @@ function setKeyState(config) {
 
 function applyConfig(config) {
   state.config = config;
+  const sandboxActive = config.sandbox === 'workspace-write';
+  $('sandboxBanner').classList.toggle('hidden', sandboxActive);
+  if (!sandboxActive) {
+    $('sandboxBannerText').textContent = (config.sandboxDescription || 'Commands can write outside the workspace.')
+      + ' Set AGENT_SANDBOX=auto or required to confine shell commands.';
+  }
   $('modelPill').textContent = config.model || 'deepseek-chat';
   $('modelPill').title = config.baseUrl || '';
   $('emptyTools').textContent = config.toolCount ?? state.tools.length;

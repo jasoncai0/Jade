@@ -132,6 +132,12 @@ public final class WebServer implements AutoCloseable {
             data.put("apiKeyConfigured", agentService.config().hasApiKey());
             data.put("maxSteps", agentService.config().agent().maxSteps());
             data.put("runs", agentService.list().size());
+            io.github.jasoncai0.agent.workspace.CommandSandbox sandbox =
+                    new io.github.jasoncai0.agent.workspace.CommandRunner().sandbox();
+            data.put("sandbox", sandbox.modeName());
+            data.put("sandboxActive", sandbox.active());
+            data.put("sandboxNetwork", sandbox.networkEnabled());
+            data.put("sandboxDescription", sandbox.description());
             sendData(exchange, 200, data);
             return;
         }

@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WebServerTest {
@@ -94,6 +95,8 @@ class WebServerTest {
             assertEquals(0, healthJson.path("code").asInt());
             assertEquals("ok", healthJson.path("data").path("status").asText());
             assertTrue(healthJson.path("data").path("apiKeyConfigured").asBoolean());
+            assertFalse(healthJson.path("data").path("sandbox").asText().isBlank());
+            assertTrue(healthJson.path("data").has("sandboxDescription"));
 
             HttpResponse<String> page = get(base + "/");
             assertEquals(200, page.statusCode());
