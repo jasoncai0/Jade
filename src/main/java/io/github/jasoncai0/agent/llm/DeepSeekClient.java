@@ -8,16 +8,22 @@ import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.LlmSettings;
 import io.github.jasoncai0.agent.config.Log;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -27,16 +33,27 @@ public final class DeepSeekClient implements LlmClient {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final int MAX_ATTEMPTS = 3;
     private static final int ERROR_BODY_LIMIT = 8_192;
+    private static final String DATA_PREFIX = "data:";
 
     private final LlmSettings settings;
     private final HttpClient http;
     private final Duration retryBaseDelay;
+    private final boolean includeUsageByDefault;
 
     public DeepSeekClient(LlmSettings settings) {
         this(settings, Duration.ofMillis(700));
     }
 
     DeepSeekClient(LlmSettings settings, Duration retryBaseDelay) {
+        this(settings, retryBaseDelay, false);
+    }
+
+    /**
+     * Test seam: {@code includeUsageByDefault} lets tests exercise the
+     * {@code stream_options} fallback without pointing at api.deepseek.com.
+     */
+    DeepSeekClient(LlmSettings settings, Duration retryBaseDelay, boolean includeUsageByDefault) {
+        this.includeUsageByDefault = includeUsageByDefault;
         this.settings = settings;
         this.retryBaseDelay = retryBaseDelay;
         this.http = HttpClient.newBuilder()
@@ -47,7 +64,12 @@ public final class DeepSeekClient implements LlmClient {
 
     @Override
     public String requestBody(ChatRequest request) {
-        return buildRequestBody(request);
+        return buildRequestBody(request, false, false);
+    }
+
+    @Override
+    public String requestBody(ChatRequest request, boolean stream) {
+        return buildRequestBody(request, stream, stream && usesOfficialEndpoint());
     }
 
     @Override
@@ -130,10 +152,260 @@ public final class DeepSeekClient implements LlmClient {
         throw lastFailure == null ? new LlmException("DeepSeek request failed") : lastFailure;
     }
 
-    private String buildRequestBody(ChatRequest request) {
+     @Override
+    public ChatResult stream(ChatRequest request, LlmClient.StreamListener listener) {
+        if (!settings.hasApiKey()) {
+            throw new LlmException("DEEPSEEK_API_KEY is not set. Copy .env.example to .env and add your key.");
+        }
+        LlmClient.StreamListener target = listener == null ? LlmClient.StreamListener.noop() : listener;
+        URI endpoint = URI.create(settings.endpoint(request.hasStrictTools()));
+        boolean includeUsage = includeUsageByDefault || usesOfficialEndpoint();
+        LlmException lastFailure = null;
+        int attempt = 1;
+        while (attempt <= MAX_ATTEMPTS) {
+            String body = buildRequestBody(request, true, includeUsage);
+            long start = System.nanoTime();
+            try {
+                HttpRequest httpRequest = newRequest(endpoint, body, "text/event-stream");
+                Log.info("llm.stream_request", Map.of(
+                        "model", settings.model(),
+                        "messages", request.messages().size(),
+                        "tools", request.tools().size(),
+                        "attempt", attempt
+                ));
+                HttpResponse<InputStream> response = http.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
+                long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+                int status = response.statusCode();
+                if (status != 200) {
+                    String errorBody = readErrorBody(response.body());
+                    String message = extractErrorMessage(errorBody, status);
+                    if (status == 400 && includeUsage && mentionsStreamOptions(message)) {
+                        includeUsage = false;
+                        Log.warn("llm.stream_options_rejected", Map.of("attempt", attempt));
+                        continue;
+                    }
+                    lastFailure = new LlmException(message, status, extractErrorCode(errorBody), null);
+                    boolean retryable = status == 429 || status >= 500;
+                    if (!retryable || attempt == MAX_ATTEMPTS) {
+                        throw lastFailure;
+                    }
+                    long delayMs = retryDelayMs(attempt, response.headers().firstValue("Retry-After").orElse(null));
+                    Log.warn("llm.retry", Map.of("status", status, "attempt", attempt, "delayMs", delayMs));
+                    attempt++;
+                    sleep(delayMs);
+                    continue;
+                }
+                ChatResult result = parseStream(response.body(), target);
+                Log.info("llm.stream_response", Map.of(
+                        "model", settings.model(),
+                        "finishReason", String.valueOf(result.finishReason()),
+                        "toolCalls", result.toolCalls().size(),
+                        "promptTokens", result.usage().promptTokens(),
+                        "completionTokens", result.usage().completionTokens(),
+                        "elapsedMs", elapsedMs
+                ));
+                return result;
+            } catch (HttpTimeoutException e) {
+                lastFailure = new LlmException("DeepSeek stream timed out after "
+                        + settings.timeoutSeconds() + "s", 0, e);
+                if (attempt == MAX_ATTEMPTS) {
+                    throw lastFailure;
+                }
+                Log.warn("llm.timeout", Map.of("attempt", attempt));
+                attempt++;
+                sleep(retryDelayMs(attempt, null));
+            } catch (IOException e) {
+                if (Thread.currentThread().isInterrupted()) {
+                    throw new LlmException("DeepSeek stream interrupted", 0, e);
+                }
+                lastFailure = new LlmException("DeepSeek stream failed: " + e.getMessage(), 0, e);
+                if (attempt == MAX_ATTEMPTS) {
+                    throw lastFailure;
+                }
+                Log.warn("llm.stream_io_error", Map.of("attempt", attempt,
+                        "error", String.valueOf(e.getMessage())));
+                attempt++;
+                sleep(retryDelayMs(attempt, null));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new LlmException("DeepSeek stream interrupted", 0, e);
+            }
+        }
+        throw lastFailure == null ? new LlmException("DeepSeek stream failed") : lastFailure;
+    }
+
+    private HttpRequest newRequest(URI endpoint, String body, String accept) {
+        return HttpRequest.newBuilder(endpoint)
+                .timeout(Duration.ofSeconds(settings.timeoutSeconds()))
+                .header("Authorization", "Bearer " + settings.apiKey())
+                .header("Content-Type", "application/json")
+                .header("Accept", accept)
+                .header("User-Agent", "java-coding-agent/" + AppConfig.VERSION)
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+    }
+
+    private boolean usesOfficialEndpoint() {
+        return settings.endpoint().contains("api.deepseek.com");
+    }
+
+    private static boolean mentionsStreamOptions(String message) {
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase(java.util.Locale.ROOT);
+        return lower.contains("stream_options") || lower.contains("include_usage");
+    }
+
+    private static String readErrorBody(InputStream stream) {
+        if (stream == null) {
+            return "";
+        }
+        try (InputStream body = stream) {
+            byte[] bytes = body.readNBytes(ERROR_BODY_LIMIT);
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    private ChatResult parseStream(InputStream stream, LlmClient.StreamListener listener) {
+        StringBuilder content = new StringBuilder();
+        StringBuilder reasoning = new StringBuilder();
+        Map<Integer, ToolCallBuilder> calls = new TreeMap<>();
+        Usage usage = Usage.ZERO;
+        String finishReason = null;
+        boolean sawChunk = false;
+        boolean sawDone = false;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isEmpty() || line.startsWith(":")) {
+                    continue;
+                }
+                if (!line.startsWith(DATA_PREFIX)) {
+                    continue;
+                }
+                String data = line.substring(DATA_PREFIX.length()).strip();
+                if (data.isEmpty()) {
+                    continue;
+                }
+                if ("[DONE]".equals(data)) {
+                    sawDone = true;
+                    break;
+                }
+                JsonNode root;
+                try {
+                    root = JSON.readTree(data);
+                } catch (IOException malformed) {
+                    continue;
+                }
+                JsonNode error = root.get("error");
+                if (error != null && !error.isNull()) {
+                    String message = textOrNull(error.get("message"));
+                    throw new LlmException(message == null ? "DeepSeek stream error" : message,
+                            200, textOrNull(error.get("code")), null);
+                }
+                sawChunk = true;
+                JsonNode usageNode = root.get("usage");
+                if (usageNode != null && usageNode.isObject()) {
+                    usage = new Usage(
+                            usageNode.path("prompt_tokens").asInt(0),
+                            usageNode.path("completion_tokens").asInt(0),
+                            usageNode.path("total_tokens").asInt(0)
+                    );
+                    listener.onUsage(usage);
+                }
+                JsonNode choices = root.path("choices");
+                if (!choices.isArray() || choices.isEmpty()) {
+                    continue;
+                }
+                JsonNode choice = choices.get(0);
+                String reason = textOrNull(choice.get("finish_reason"));
+                if (reason != null && !reason.isBlank()) {
+                    finishReason = reason;
+                }
+                JsonNode delta = choice.path("delta");
+                String text = textOrNull(delta.get("content"));
+                if (text != null && !text.isEmpty()) {
+                    content.append(text);
+                    listener.onText(text);
+                }
+                String reasoningDelta = textOrNull(delta.get("reasoning_content"));
+                if (reasoningDelta != null && !reasoningDelta.isEmpty()) {
+                    reasoning.append(reasoningDelta);
+                    listener.onReasoning(reasoningDelta);
+                }
+                JsonNode toolCalls = delta.get("tool_calls");
+                if (toolCalls != null && toolCalls.isArray()) {
+                    for (JsonNode call : toolCalls) {
+                        int index = call.path("index").asInt(0);
+                        ToolCallBuilder builder = calls.computeIfAbsent(index, ToolCallBuilder::new);
+                        String id = textOrNull(call.get("id"));
+                        if (id != null && !id.isBlank()) {
+                            builder.id = id;
+                        }
+                        JsonNode function = call.path("function");
+                        String name = textOrNull(function.get("name"));
+                        if (name != null && !name.isBlank()) {
+                            builder.name = name;
+                        }
+                        String arguments = textOrNull(function.get("arguments"));
+                        if (arguments != null) {
+                            builder.arguments.append(arguments);
+                        }
+                        listener.onToolCallDelta(index, id, name, arguments);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            if (Thread.currentThread().isInterrupted()) {
+                throw new LlmException("DeepSeek stream interrupted", 0, e);
+            }
+            throw new LlmException("DeepSeek stream failed: " + e.getMessage(), 0, e);
+        }
+        if (!sawChunk) {
+            throw new LlmException("DeepSeek returned an empty stream", 0, "EMPTY_RESPONSE", null);
+        }
+        if (!sawDone && finishReason == null) {
+            throw new LlmException("DeepSeek stream ended before completion", 0, "STREAM_TRUNCATED", null);
+        }
+        List<ToolCall> merged = new ArrayList<>();
+        calls.values().stream()
+                .filter(builder -> builder.name != null && !builder.name.isBlank())
+                .sorted(Comparator.comparingInt(builder -> builder.index))
+                .forEach(builder -> merged.add(new ToolCall(
+                        builder.id == null ? "call_" + builder.index : builder.id,
+                        builder.name,
+                        builder.arguments.length() == 0 ? "{}" : builder.arguments.toString()
+                )));
+        return new ChatResult(
+                content.length() == 0 ? null : content.toString(),
+                reasoning.length() == 0 ? null : reasoning.toString(),
+                merged,
+                finishReason,
+                usage
+        );
+    }
+
+    private static final class ToolCallBuilder {
+        private final int index;
+        private String id;
+        private String name;
+        private final StringBuilder arguments = new StringBuilder();
+
+        private ToolCallBuilder(int index) {
+            this.index = index;
+        }
+    }
+
+    private String buildRequestBody(ChatRequest request, boolean stream, boolean includeUsage) {
         ObjectNode root = JSON.createObjectNode();
         root.put("model", settings.model());
-        root.put("stream", false);
+        root.put("stream", stream);
+        if (stream && includeUsage) {
+            root.putObject("stream_options").put("include_usage", true);
+        }
         root.put("temperature", request.temperature());
         root.put("max_tokens", request.maxTokens());
         if (request.responseFormat() != null) {
