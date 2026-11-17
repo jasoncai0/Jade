@@ -57,6 +57,10 @@ public final class ToolRegistry {
         return Set.copyOf(tools.keySet());
     }
 
+    public boolean concurrencySafe(String name) {
+        return find(name).map(Tool::concurrencySafe).orElse(false);
+    }
+
     public List<Map<String, Object>> describe() {
         List<Map<String, Object>> result = new ArrayList<>();
         for (Tool tool : tools.values()) {

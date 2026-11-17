@@ -89,4 +89,9 @@ public final class SearchTextTool implements Tool {
         return ToolResult.ok(result + "\n(" + matches + " match(es), " + filesScanned + " files scanned)",
                 Map.of("matches", matches, "filesScanned", filesScanned));
     }
+
+    @Override
+    public boolean concurrencySafe() {
+        return true;
+    }
 }

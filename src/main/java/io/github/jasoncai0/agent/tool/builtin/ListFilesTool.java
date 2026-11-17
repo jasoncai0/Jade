@@ -96,4 +96,9 @@ public final class ListFilesTool implements Tool {
         }
         return false;
     }
+
+    @Override
+    public boolean concurrencySafe() {
+        return true;
+    }
 }

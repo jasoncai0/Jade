@@ -33,4 +33,9 @@ public final class ReadFileTool implements Tool {
         return ToolResult.ok(numbered.isBlank() ? "(empty file)" : numbered,
                 Map.of("path", path, "lines", content.split("\n", -1).length));
     }
+
+    @Override
+    public boolean concurrencySafe() {
+        return true;
+    }
 }

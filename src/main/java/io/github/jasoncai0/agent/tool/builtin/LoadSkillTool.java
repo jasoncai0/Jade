@@ -34,4 +34,9 @@ public final class LoadSkillTool implements Tool {
         context.skillLoaded(name);
         return ToolResult.ok(skill.get().render(), Map.of("skill", name));
     }
+
+    @Override
+    public boolean concurrencySafe() {
+        return true;
+    }
 }
