@@ -454,27 +454,21 @@ public final class AgentLoop {
                               RunControl control, int[] stats, PermissionManager permissions,
                               ToolOutputStore spill) {
         int limit = Math.min(calls.size(), settings.maxToolCallsPerStep());
+        List<PreparedCall> prepared = new ArrayList<>();
         for (int i = 0; i < calls.size(); i++) {
             control.checkCancelled();
             ToolCall call = calls.get(i);
+            PreparedCall item = new PreparedCall(call);
+            prepared.add(item);
             if (i >= limit) {
-                String message = "Skipped: the limit is " + settings.maxToolCallsPerStep()
+                item.error = "Skipped: the limit is " + settings.maxToolCallsPerStep()
                         + " tool calls per model turn. Ask for this tool again in the next turn.";
-                messages.add(ChatMessage.tool(call.id(), "ERROR " + call.name() + ": " + message));
-                log.emit("tool.end", eventMap("id", call.id(), "name", call.name(), "ok", false,
-                        "output", message, "durationMs", 0));
-                stats[1]++;
                 continue;
             }
-            Map<String, Object> args;
             try {
-                args = parseArguments(call.arguments());
+                item.args = parseArguments(call.arguments());
             } catch (RuntimeException e) {
-                String message = "Invalid JSON arguments: " + e.getMessage();
-                messages.add(ChatMessage.tool(call.id(), "ERROR " + call.name() + ": " + message));
-                log.emit("tool.end", eventMap("id", call.id(), "name", call.name(), "ok", false,
-                        "output", message, "durationMs", 0));
-                stats[1]++;
+                item.error = "Invalid JSON arguments: " + e.getMessage();
                 continue;
             }
             log.emit("tool.start", eventMap(
@@ -482,57 +476,138 @@ public final class AgentLoop {
                     "name", call.name(),
                     "arguments", truncate(call.arguments(), 5000)
             ));
-            PermissionResult permission = permissions.authorize(call.name(), args);
-            if (!permission.allowed()) {
-                String message = "Permission denied: " + permission.reason();
-                messages.add(ChatMessage.tool(call.id(), "ERROR " + call.name() + ": " + message));
-                log.emit("tool.end", eventMap("id", call.id(), "name", call.name(), "ok", false,
-                        "output", message, "durationMs", 0));
+            item.permission = permissions.authorize(call.name(), item.args);
+            if (!item.permission.allowed()) {
+                item.error = "Permission denied: " + item.permission.reason();
+            }
+        }
+
+        long executable = prepared.stream().filter(PreparedCall::executable).count();
+        boolean canParallel = executable >= 2
+                && prepared.stream().allMatch(item -> tools.concurrencySafe(item.call.name()))
+                && prepared.stream().filter(PreparedCall::executable)
+                        .allMatch(item -> !item.permission.networkAllowed());
+        if (canParallel) {
+            runParallel(prepared, context, control);
+        } else {
+            for (PreparedCall item : prepared) {
+                if (!item.executable()) {
+                    continue;
+                }
+                context.setNetworkAllowed(item.permission.networkAllowed());
+                long started = System.currentTimeMillis();
+                try {
+                    item.result = tools.execute(item.call.name(), item.args, context);
+                } finally {
+                    context.setNetworkAllowed(false);
+                }
+                item.duration = System.currentTimeMillis() - started;
+            }
+        }
+
+        for (PreparedCall item : prepared) {
+            if (!item.executable()) {
+                messages.add(ChatMessage.tool(item.call.id(),
+                        "ERROR " + item.call.name() + ": " + item.error));
+                log.emit("tool.end", eventMap("id", item.call.id(), "name", item.call.name(),
+                        "ok", false, "output", item.error, "durationMs", 0));
                 stats[1]++;
                 continue;
             }
-            long started = System.currentTimeMillis();
-            ToolResult result;
-            context.setNetworkAllowed(permission.networkAllowed());
-            try {
-                result = tools.execute(call.name(), args, context);
-            } finally {
-                context.setNetworkAllowed(false);
+            ToolResult result = item.result;
+            if (result == null) {
+                result = ToolResult.error("Tool " + item.call.name() + " was cancelled before it ran");
             }
-            long duration = System.currentTimeMillis() - started;
             String output;
             try {
-                ToolOutputRef ref = spill.save(state.id(), log.lastSeq(), call.name(), result.output());
+                ToolOutputRef ref = spill.save(state.id(), log.lastSeq(), item.call.name(), result.output());
                 output = spill.inline(result.output(), ref);
             } catch (WorkspaceException e) {
                 output = truncate(result.output(), MAX_TOOL_OUTPUT_CHARS)
                         + "\n[spill failed: " + e.getMessage() + "]";
             }
-            messages.add(ChatMessage.tool(call.id(),
-                    (result.ok() ? "OK " : "ERROR ") + call.name() + "\n" + output));
+            messages.add(ChatMessage.tool(item.call.id(),
+                    (result.ok() ? "OK " : "ERROR ") + item.call.name() + "\n" + output));
             if (result.ok()) {
                 stats[0]++;
             } else {
                 stats[1]++;
             }
             Map<String, Object> event = new LinkedHashMap<>();
-            event.put("id", call.id());
-            event.put("name", call.name());
+            event.put("id", item.call.id());
+            event.put("name", item.call.name());
             event.put("ok", result.ok());
             event.put("output", output);
-            event.put("durationMs", duration);
+            event.put("durationMs", item.duration);
             event.put("data", result.data());
             log.emit("tool.end", event);
-            if (call.name().equals("update_plan")) {
+            if (item.call.name().equals("update_plan")) {
                 log.emit("plan", eventMap("plan", state.plan()));
             }
             Log.info("agent.tool", Map.of(
                     "runId", state.id(),
-                    "tool", call.name(),
+                    "tool", item.call.name(),
                     "ok", result.ok(),
-                    "durationMs", duration
+                    "durationMs", item.duration
             ));
-            context.refreshFiles();
+        }
+        context.refreshFiles();
+        control.checkCancelled();
+    }
+
+    private void runParallel(List<PreparedCall> prepared, ToolContext context, RunControl control) {
+        List<PreparedCall> runnable = prepared.stream().filter(PreparedCall::executable).toList();
+        int workers = Math.min(4, runnable.size());
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(workers);
+        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+        try {
+            for (PreparedCall item : runnable) {
+                if (control.isCancelled()) {
+                    break;
+                }
+                futures.add(pool.submit(() -> {
+                    if (control.isCancelled()) {
+                        return;
+                    }
+                    long started = System.currentTimeMillis();
+                    try {
+                        item.result = tools.execute(item.call.name(), item.args, context);
+                    } catch (RuntimeException e) {
+                        item.result = ToolResult.error("Tool " + item.call.name() + " failed: " + e.getMessage());
+                    }
+                    item.duration = System.currentTimeMillis() - started;
+                }));
+            }
+            for (java.util.concurrent.Future<?> future : futures) {
+                try {
+                    future.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RunControl.RunCancelledException();
+                } catch (java.util.concurrent.ExecutionException e) {
+                    throw new IllegalStateException("Parallel tool worker failed", e.getCause());
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        control.checkCancelled();
+    }
+
+    private static final class PreparedCall {
+        private final ToolCall call;
+        private Map<String, Object> args;
+        private PermissionResult permission;
+        private String error;
+        private ToolResult result;
+        private long duration;
+
+        private PreparedCall(ToolCall call) {
+            this.call = call;
+        }
+
+        private boolean executable() {
+            return error == null && permission != null && permission.allowed();
         }
     }
 
