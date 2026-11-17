@@ -341,6 +341,7 @@ public final class AgentService implements AutoCloseable {
         summary.put("commandTimeoutSeconds", config.agent().commandTimeoutSeconds());
         summary.put("autoVerify", config.agent().autoVerify());
         summary.put("goalMode", config.agent().goalMode());
+        summary.put("overflowRecovery", config.agent().overflowRecovery());
         summary.put("permissionMode", config.agent().permissionMode().id());
         summary.put("workspaceRoot", config.workspacesDir().toString());
         summary.put("skillsDir", config.skillsDir().toString());

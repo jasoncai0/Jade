@@ -101,6 +101,7 @@ public final class CodingAgentApplication {
                 ? "token trigger disabled"
                 : config.agent().contextTokenBudget() + " tokens"));
         System.out.println("auto verify      " + config.agent().autoVerify());
+        System.out.println("overflow recovery " + config.agent().overflowRecovery());
         System.out.println("sandbox          " + new CommandRunner().sandbox().description());
         boolean mysqlReady = false;
         if (config.mysql() == null) {
@@ -436,7 +437,8 @@ public final class CodingAgentApplication {
                     agent.commandTimeoutSeconds(),
                     agent.autoVerify(),
                     options.permissionMode() == null ? agent.permissionMode() : options.permissionMode(),
-                    agent.tokenBudget(), agent.goalMode(), agent.contextTokenBudget());
+                    agent.tokenBudget(), agent.goalMode(), agent.contextTokenBudget(),
+                    agent.overflowRecovery());
         }
         ServerSettings server = config.server();
         if (options.port() != null || options.host() != null) {

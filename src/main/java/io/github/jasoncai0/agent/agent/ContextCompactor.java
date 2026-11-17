@@ -124,6 +124,112 @@ public final class ContextCompactor {
                 summarized, summaryUsage, compactedFlag);
     }
 
+    /**
+     * Last-resort compaction used after the provider rejects a request for
+     * exceeding its context window. Unlike {@link #compact}, this may drop the
+     * usual three-group minimum and keeps only the system prompt, the original
+     * task, and the latest user group.
+     */
+    public Result compactForOverflow(List<ChatMessage> messages, ContextSummarizer summarizer) {
+        int beforeChars = chars(messages);
+        int beforeTokens = tokens(messages);
+        if (messages.size() <= 2) {
+            return new Result(List.copyOf(messages), 0, 0, 0,
+                    beforeChars, beforeChars, beforeTokens, beforeTokens,
+                    false, Usage.ZERO, false);
+        }
+
+        ChatMessage system = messages.get(0);
+        ChatMessage firstUser = messages.get(1);
+        List<List<ChatMessage>> groups = groups(messages.subList(2, messages.size()));
+        int latestUserGroup = -1;
+        for (int i = 0; i < groups.size(); i++) {
+            if (groups.get(i).stream().anyMatch(message -> message.role() == Role.USER)) {
+                latestUserGroup = i;
+            }
+        }
+        int keepFrom = latestUserGroup >= 0 ? latestUserGroup : Math.max(0, groups.size() - 1);
+
+        List<ChatMessage> removed = new ArrayList<>();
+        for (int i = 0; i < keepFrom; i++) {
+            removed.addAll(groups.get(i));
+        }
+        List<ChatMessage> kept = new ArrayList<>();
+        for (int i = keepFrom; i < groups.size(); i++) {
+            kept.addAll(groups.get(i));
+        }
+
+        MicroResult removedMicro = microCompact(removed, 2_000, 1_000, 500);
+        MicroResult keptMicro = microCompact(kept, 2_000, 1_000, 500);
+        removed = removedMicro.messages();
+        kept = keptMicro.messages();
+
+        String summary = null;
+        Usage summaryUsage = Usage.ZERO;
+        boolean summarized = false;
+        if (!removed.isEmpty() && summarizer != null) {
+            try {
+                ContextSummarizer.Summary result = summarizer.summarize(
+                        firstUser.content(), removed, 1_200);
+                if (!result.text().isBlank()) {
+                    summary = result.text();
+                    summaryUsage = result.usage();
+                    summarized = true;
+                }
+            } catch (RuntimeException ignored) {
+                // Fall back to the deterministic note below.
+            }
+        }
+
+        List<ChatMessage> compacted = new ArrayList<>();
+        compacted.add(system);
+        compacted.add(firstUser);
+        if (!removed.isEmpty()) {
+            if (summarized) {
+                compacted.add(ChatMessage.system("[Context summary of earlier conversation]\n" + summary));
+            } else {
+                compacted.add(ChatMessage.system(
+                        "[Context compacted after the model rejected the request: " + removed.size()
+                                + " earlier messages were removed. The full event stream is in "
+                                + ".agent/events.jsonl and MySQL history.]"));
+            }
+        }
+        compacted.addAll(kept);
+
+        int latestUserIndex = -1;
+        for (int i = compacted.size() - 1; i >= 2; i--) {
+            if (compacted.get(i).role() == Role.USER) {
+                latestUserIndex = i;
+                break;
+            }
+        }
+        int truncated = 0;
+        List<ChatMessage> bounded = new ArrayList<>();
+        for (int i = 0; i < compacted.size(); i++) {
+            ChatMessage message = compacted.get(i);
+            String content = message.content();
+            boolean protect = i < 2 || i == latestUserIndex || message.role() == Role.TOOL
+                    || !message.toolCalls().isEmpty();
+            if (!protect && content != null && content.length() > 4_000) {
+                content = content.substring(0, 4_000)
+                        + "\n... [message truncated by overflow recovery]";
+                truncated++;
+            }
+            bounded.add(new ChatMessage(message.role(), content, message.toolCallId(),
+                    List.of(), message.reasoningContent()));
+        }
+        compacted = bounded;
+
+        int afterChars = chars(compacted);
+        int afterTokens = tokens(compacted);
+        boolean compactedFlag = !removed.isEmpty() || removedMicro.count() + keptMicro.count() > 0
+                || summarized || truncated > 0;
+        return new Result(List.copyOf(compacted), removed.size(),
+                removedMicro.count() + keptMicro.count(), truncated,
+                beforeChars, afterChars, beforeTokens, afterTokens,
+                summarized, summaryUsage, compactedFlag);
+    }
+
     public int chars(List<ChatMessage> messages) {
         int total = 0;
         for (ChatMessage message : messages) {
@@ -166,16 +272,20 @@ public final class ContextCompactor {
     }
 
     private MicroResult microCompact(List<ChatMessage> messages) {
+        return microCompact(messages, MICRO_TOOL_CHARS, MICRO_HEAD_CHARS, MICRO_TAIL_CHARS);
+    }
+
+    private MicroResult microCompact(List<ChatMessage> messages, int threshold, int head, int tail) {
         List<ChatMessage> result = new ArrayList<>();
         int count = 0;
         for (ChatMessage message : messages) {
             String content = message.content();
-            if (message.role() == Role.TOOL && content != null && content.length() > MICRO_TOOL_CHARS) {
-                int omitted = content.length() - MICRO_HEAD_CHARS - MICRO_TAIL_CHARS;
-                String shortened = content.substring(0, MICRO_HEAD_CHARS)
+            if (message.role() == Role.TOOL && content != null && content.length() > threshold) {
+                int omitted = content.length() - head - tail;
+                String shortened = content.substring(0, head)
                         + "\n... [tool output micro-compacted: " + omitted
                         + " chars omitted; full output is in .agent/events.jsonl]\n"
-                        + content.substring(content.length() - MICRO_TAIL_CHARS);
+                        + content.substring(content.length() - tail);
                 result.add(ChatMessage.tool(message.toolCallId(), shortened));
                 count++;
             } else {

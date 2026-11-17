@@ -94,7 +94,7 @@ class MultiLanguageVerifierTest {
 
     @Test
     void registersGenericAndJavaAliasTools() {
-        assertEquals(14, BuiltInTools.all().size());
+        assertEquals(15, BuiltInTools.all().size());
         assertTrue(BuiltInTools.all().stream().anyMatch(tool -> tool.spec().name().equals("compile_code")));
         assertTrue(BuiltInTools.all().stream().anyMatch(tool -> tool.spec().name().equals("run_code")));
         assertTrue(BuiltInTools.all().stream().anyMatch(tool -> tool.spec().name().equals("compile_java")));
