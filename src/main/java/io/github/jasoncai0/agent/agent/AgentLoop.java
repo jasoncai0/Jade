@@ -484,9 +484,9 @@ public final class AgentLoop {
 
         long executable = prepared.stream().filter(PreparedCall::executable).count();
         boolean canParallel = executable >= 2
-                && prepared.stream().allMatch(item -> tools.concurrencySafe(item.call.name()))
                 && prepared.stream().filter(PreparedCall::executable)
-                        .allMatch(item -> !item.permission.networkAllowed());
+                        .allMatch(item -> tools.concurrencySafe(item.call.name())
+                                && !item.permission.networkAllowed());
         if (canParallel) {
             runParallel(prepared, context, control);
         } else {

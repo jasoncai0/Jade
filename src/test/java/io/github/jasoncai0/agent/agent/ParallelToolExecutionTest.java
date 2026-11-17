@@ -176,6 +176,36 @@ class ParallelToolExecutionTest {
     }
 
     @Test
+    void deniedCallDoesNotConsumeAWorkerSlot() throws Exception {
+        AgentSettings readOnly = new AgentSettings(
+                8, 8, 200_000, 100, true, PermissionMode.READ_ONLY, 0, false, 30_000, true);
+        ToolRegistry registry = new ToolRegistry();
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger peak = new AtomicInteger();
+        for (String name : List.of("read_file", "list_files", "search_text", "load_skill")) {
+            registry.register(delayed(name, true, active, peak));
+        }
+        registry.register(delayed("write_file", false, active, peak));
+
+        Harness harness = harness(registry, List.of(
+                new ToolCall("c1", "read_file", "{}"),
+                new ToolCall("c2", "list_files", "{}"),
+                new ToolCall("c3", "search_text", "{}"),
+                new ToolCall("c4", "load_skill", "{}"),
+                new ToolCall("c5", "write_file", "{}")), readOnly);
+        RunSnapshot snapshot = harness.loop().run("go", harness.workspace(),
+                harness.state(), harness.events(), harness.control());
+
+        assertEquals("SUCCEEDED", snapshot.status());
+        assertEquals(4, peak.get());
+        assertTrue(harness.events().snapshot().stream()
+                .filter(event -> event.type().equals("tool.end"))
+                .anyMatch(event -> "write_file".equals(event.data().get("name"))
+                        && Boolean.FALSE.equals(event.data().get("ok"))
+                        && String.valueOf(event.data().get("output")).contains("read-only")));
+    }
+
+    @Test
     void workerExceptionBecomesAToolError() throws Exception {
         ToolRegistry registry = new ToolRegistry();
         registry.register(new Probe("read_a", true, null, 0));
@@ -257,15 +287,20 @@ class ParallelToolExecutionTest {
     }
 
     private Harness harness(ToolRegistry registry, List<ToolCall> calls) throws Exception {
+        return harness(registry, calls, SETTINGS);
+    }
+
+    private Harness harness(ToolRegistry registry, List<ToolCall> calls,
+                            AgentSettings settings) throws Exception {
         Path root = temp.resolve("ws-" + System.nanoTime());
         Files.createDirectories(root.resolve(".agent-build/classes"));
         Path skills = temp.resolve("skills-" + System.nanoTime());
         Files.createDirectories(skills);
         ScriptedLlm llm = new ScriptedLlm(calls);
         return new Harness(
-                new AgentLoop(llm, registry, SkillRegistry.load(skills), SETTINGS, 1024),
+                new AgentLoop(llm, registry, SkillRegistry.load(skills), settings, 1024),
                 Workspace.open(root),
-                new RunState("run-parallel", "go", "ws", SETTINGS.maxSteps()),
+                new RunState("run-parallel", "go", "ws", settings.maxSteps()),
                 new RunEventLog(),
                 new RunControl());
     }
