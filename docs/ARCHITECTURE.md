@@ -302,13 +302,21 @@ registers each tool as `mcp_<server>_<tool>` (sanitized, collision-suffixed,
 `structuredContent`; `isError` becomes a tool error. Namespacing avoids
 collisions with built-ins and ServiceLoader tools.
 
+If the `initialize` result advertises `capabilities.resources`, `McpManager`
+registers three more read-only tools per server: `mcp_<server>_list_resources`,
+`mcp_<server>_list_resource_templates`, and `mcp_<server>_read_resource`
+(`McpConnection.java:111-205`; `McpResourceTool.java:20`). Lists follow
+`nextCursor` up to 200 entries. `resources/read` returns `contents[]`; text is
+passed through, `blob` becomes a size placeholder so binary payloads never enter
+the transcript. Servers without the capability keep exactly their old surface.
+
 MCP tools are external actions, so `PermissionPolicy` sees an unknown tool and
 asks in `balanced` mode. Approval scope is per run; a GitHub write therefore
 requires an explicit decision. A failed server is recorded in `/api/mcp` and
 skipped; it never prevents the rest of Jade from starting. Tokens are expanded
 from environment variables at load time and are never written to events.
 
-MCP v1 deliberately covers tools only: no resources, prompts, sampling,
+MCP v1 deliberately covers tools and resources: no prompts, sampling,
 elicitation, OAuth flow, or automatic server installation.
 
 ## 10. Durable history and SSE

@@ -445,9 +445,13 @@ toolset you intend to use; the agent can list repositories and create or update
 files, but cannot do anything the token is not allowed to do. For a local stdio
 server use `"type":"stdio"`, `"command":"..."`, and `"args":[...]` instead.
 `GET /api/mcp` reports configured servers, connection errors and tool counts;
-the Tools dialog lists each discovered MCP tool.
+the Tools dialog lists each discovered MCP tool. When a server advertises the
+MCP `resources` capability, Jade also registers three read-only tools:
+`mcp_<server>_list_resources`, `mcp_<server>_list_resource_templates`, and
+`mcp_<server>_read_resource` (URI required). Resource reads are capped at 30,000
+characters; binary resources are reported as a base64-size placeholder.
 
-MCP scope in this version is tools only (no resources, prompts, sampling or
+MCP scope in this version is tools and resources (no prompts, sampling or
 OAuth login). A server failure is reported and does not prevent Jade from
 starting. Do not put a literal token in `mcp.json`; use `${VAR}` references.
 

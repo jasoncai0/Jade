@@ -57,12 +57,12 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 | 9 | 长期记忆 | **没有长期记忆系统**；会话日志 + `AGENTS.md` + spill 是持久状态；跨会话搜索默认关闭（`D/subsystems/session.md:5`；全仓未发现 memory/notes 包，负证据） | 没有长期记忆；`AGENTS.md` + MySQL 会话 + `.agent` 文件（`J/README.md:616-629`） | 无 | — | — | 双方都没有；不要把“补记忆”当成 DSH 差距，也不建议本轮做向量库 |
 | 10 | 权限/审批 | 权限 = `(sandbox mode, approval policy)` preset；`ask/never`；只有 `allowed-once` 放行，其他全 fail-closed；审计事件 log-only（`D/subsystems/approval.md:21-28`；`D/subsystems/permission-presets.md:15-24`；`P/dsh-user-approval/src/index.ts:296-301`） | 四种模式 `balanced/strict/read-only/bypass`；ASK 阻塞 300 秒，超时拒绝；once/session；`.agent/permissions.jsonl` 审计（`J/README.md:180-216`；`J/src/main/java/io/github/jasoncai0/agent/agent/PermissionBroker.java:33-46`） | 低 | 中 | P2 | Jade 的审批 UX 已够；缺的是与沙箱模式打包、以及 shell 逐命令策略（DSH 自己也留 TODO） |
 | 11 | 沙箱 | 三平台后端：Linux bwrap/Landlock、macOS Seatbelt、Windows ACL；`read-only/workspace-write/danger-full-access`；`full/partial` 必须显式呈现（`D/subsystems/sandbox.md:5,11,20,30`；`P/dsh-sandbox-local/src/index.ts:2-4`） | 仅 macOS `sandbox-exec` 写监狱 + 可选网络；默认 off；读与进程共享宿主（`J/src/main/java/io/github/jasoncai0/agent/workspace/CommandSandbox.java:26-80`；`J/docs/SANDBOX.md`） | 高 | 高 | **P2** | 安全价值高，但 Linux/Windows 后端是独立大工程；先把“默认开/可见性”做好 |
-| 12 | MCP | tools + resources；stdio/HTTP；`mcp__server__tool` 命名；凭据模板；指数退避重连 500ms–30s、单故障 10 次（`P/dsh-mcp-resources/src/tools.ts:16-59`；`P/dsh-mcp-manager/src/index.ts:43-59`；`P/dsh-mcp-client/src/connection.ts:7-13`）。MCP prompts 未实现/未验证（ACP README 明确说 resources/prompts 没有 DSH consumer，但 Web/Host 侧另有 resources 工具） | 只有 tools（stdio + streamable HTTP）；命名 `mcp_<server>_<tool>`；无 resources/prompts/sampling/elicitation/OAuth；无重连状态机（`J/src/main/java/io/github/jasoncai0/agent/mcp/McpConnection.java:55,77`；`J/README.md:281-304`） | 中 | 中 | **P2** | resources 是 MCP 的常见用法；但 Jade 现有 MCP 工具已覆盖主路径；prompts 不作为目标 |
+| 12 | MCP | tools + resources；stdio/HTTP；`mcp__server__tool` 命名；凭据模板；指数退避重连 500ms–30s、单故障 10 次（`P/dsh-mcp-resources/src/tools.ts:16-59`；`P/dsh-mcp-manager/src/index.ts:43-59`；`P/dsh-mcp-client/src/connection.ts:7-13`）。MCP prompts 未实现/未验证 | tools + resources（stdio + streamable HTTP）；命名 `mcp_<server>_<tool>`；无 prompts/sampling/elicitation/OAuth；无重连状态机（`J/src/main/java/io/github/jasoncai0/agent/mcp/McpConnection.java:111-205`；`J/src/main/java/io/github/jasoncai0/agent/mcp/McpManager.java:61`） | 低 | 中 | **P2（已补）** | resources 已按 capability 注册，剩余差距是 prompts 与重连 |
 | 13 | Skills | 6 个根、kebab-case；catalog 只放 name+description，正文按需 inject；chokidar 热更新（`D/subsystems/skills.md:66-94,128`） | 3 个根、深度 3；top-2 全文预载进 system prompt；`load_skill` 按需；无 watcher（`J/src/main/java/io/github/jasoncai0/agent/skill/SkillRegistry.java:36-97`；`AgentLoop.java:98,120,642`） | 中 | 中 | **P2** | 预载 top-2 全文会吃上下文；catalog 化是低成本改进，但排在 P0/P1 后 |
 | 14 | 模型路由/重试 | adapter 注册；`model.select()` 只作用下一个未准备 step；**无自动 failover**；normal 默认 5 次重试、500ms 起、上限 10s、抖动 0.1（`D/subsystems/llm-streaming.md:437-461`；`P/dsh-llm/src/retry-policy.ts:15-25`） | 单 `DEEPSEEK_MODEL`；自定义网关；429/5xx/超时重试 3 次，700ms 指数 + 抖动；400/401 不重试（`J/src/main/java/io/github/jasoncai0/agent/llm/DeepSeekClient.java:28,97-122,256-268`） | 低 | 低 | P2 | DSH 也没有模型 fallback；Jade 的重试已覆盖大部分；多 provider 不是本轮目标 |
 | 15 | 可观测性 | session telemetry ledger/ops、OTel 适配器、token 投影、session inspector（`D/subsystems/session-telemetry.md:31-60`；`P/dsh-token-meter/README.md:49`） | SSE 事件、`llm.request` 完整请求体、usage、MySQL 历史、Web trace 折叠（`J/README.md:217-228`；`J/src/main/java/io/github/jasoncai0/agent/web/WebServer.java:387-434`） | 低 | 中 | — | Jade 的本地 trace 已够用；OTel 是产品层 |
 | 16 | CLI / Web UI | WebSocket mux（不是 SSE）、桌面 Electron、headless、ACP、SDK（`D/subsystems/web-server.md:5,47`；`P/dsh-api-gateway/src/stream-protocol.ts:7`） | `check/ping/headless/serve` 四模式；本地 HTTP + SSE；1,879 行原生 JS；无鉴权、127.0.0.1（`J/src/main/java/io/github/jasoncai0/agent/web/WebServer.java:46,244,387-434`；`J/src/main/resources/web/app.js:713`） | 低 | 中 | — | 形态不同；不需要为了“像 DSH”重写 WebSocket/桌面壳 |
-| 17 | 测试/发布/扩展 | Cordis 插件树、profile/bundle、plugin_manager；测试源码不随 asar 发布；testkit/回放/mock server 在 devDependencies（`D/architecture.md:15-43`；`D/tool-catalog.md`；`P/dsh/package.json`） | 26 个测试文件、73 个 `@Test`；ServiceLoader `ToolProvider`；shade 单 jar；无插件市场（`J/pom.xml`；`J/src/main/java/io/github/jasoncai0/agent/tool/ToolProvider.java`） | 低 | 低 | — | Cordis 是 DSH 的产品外壳；Jade 的 ServiceLoader 已够扩展 |
+| 17 | 测试/发布/扩展 | Cordis 插件树、profile/bundle、plugin_manager；测试源码不随 asar 发布；testkit/回放/mock server 在 devDependencies（`D/architecture.md:15-43`；`D/tool-catalog.md`；`P/dsh/package.json`） | 26 个测试文件、137 个 `@Test`；ServiceLoader `ToolProvider`；shade 单 jar；无插件市场（`J/pom.xml`；`J/src/main/java/io/github/jasoncai0/agent/tool/ToolProvider.java`） | 低 | 低 | — | Cordis 是 DSH 的产品外壳；Jade 的 ServiceLoader 已够扩展 |
 
 ## 3. Top 5–8 差距
 
@@ -140,13 +140,11 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 
 ### 3.6 MCP resources（P2）
 
-**现状。** Jade 只实现 `initialize → tools/list → tools/call`（`McpConnection.java:55,77`）；DSH 有 `list_mcp_resources/list_mcp_resource_templates/read_mcp_resource` 三个模型工具（`P/dsh-mcp-resources/src/tools.ts:16-59`）。MCP prompts 在 DSH 里也没有明确 consumer，不作为本轮目标。
+**现状（已补）。** `McpConnection.initialize` 记录 `capabilities.resources`（`McpConnection.java:61`），并实现 `resources/list`、`resources/templates/list`、`resources/read`（`:116`、`:148`、`:180`）；`McpManager` 仅在 server 声明能力时注册三个只读工具（`McpManager.java:61`；`McpResourceTool.java:20`）。列表按 `nextCursor` 分页，上限 200；读取把 `blob` 换成大小占位，避免二进制进 transcript。
 
-**缺少它会怎样。** 资源型 MCP server（文档库、数据库 schema、知识库）只能暴露成工具；模型无法按 URI 浏览/读取资源。
+**补上后用户能做什么。** 模型可以列出文档库/数据库 schema 的资源 URI 或模板，再按 URI 读取文本内容；没有 resources 能力的 server 工具面完全不变。
 
-**补上后用户能做什么。** 直接列资源模板、读资源内容。
-
-**边界。** 本轮不做；等 P0/P1 稳定后再评估。需要先确认 Jade 的 MCP 连接是否支持并发请求/分页。
+**边界。** 不实现订阅（`resources/subscribe`）与 prompts；不自动把资源内容灌进上下文，仍由模型显式调用 `read_resource`。
 
 ### 3.7 Skills 目录化与热更新（P2）
 
@@ -189,7 +187,7 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 - **MySQL 持久化 + 启动恢复**：200 个会话、RUNNING→FAILED、SSE 重放（`AgentService.java:58,397-472`；`RunState.java:59-78`）。
 - **Goal review**：无工具 JSON 复核，连续 3 次拒绝失败（`AgentLoop.java:346-376`；`LlmGoalReviewer.java:26-81`）。
 - **单 jar、Jackson-only、无 Cordis**：安装/调试成本低，代码可读。
-- **73 个测试**：覆盖循环、压缩、权限、MCP stdio/HTTP、MySQL；比“功能多但测试不随产物发布”的 DSH 更容易本地回归。
+- **137 个测试**：覆盖循环、压缩、权限、MCP stdio/HTTP、MySQL；比“功能多但测试不随产物发布”的 DSH 更容易本地回归。
 
 ## 6. 建议顺序与评审点
 
@@ -248,8 +246,9 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 | 真流式输出（P1-1） | 已完成，SSE 解析 + `assistant.delta` 实时帧（不落库、不带 `id:`） | `1c49e2a`、`b4852ec`、`2d2644e` |
 | 会话 fork（P1-2） | 已完成，复制工作区/transcript/事件历史，`parentRunId` 记录血缘；fork 空闲等待首条消息 | `5d9977e` |
 | 只读子代理（P1-3） | 已完成，`delegate_task` 每父最多 2 并发、深度 1、独立 transcript，父只收摘要 | `18bebe4` |
+| MCP resources（P2-1） | 已完成，按 `capabilities.resources` 注册 3 个只读工具；列表分页 200、binary 占位 | `854ba42` |
 
-矩阵第 6、7 行（真流式、fork）、第 2 行（并行）与第 3 行（子代理）现在描述的是历史缺口，不再是当前状态。仍然未做：MCP resources、跨平台沙箱、插件/预设体系、成本折算。
+矩阵第 6、7 行（真流式、fork）、第 2 行（并行）与第 3 行（子代理）现在描述的是历史缺口，不再是当前状态。仍然未做：MCP prompts、跨平台沙箱、插件/预设体系、成本折算。
 
 ## 9. 未验证/待补证据
 

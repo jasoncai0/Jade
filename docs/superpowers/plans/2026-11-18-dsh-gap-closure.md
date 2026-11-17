@@ -603,6 +603,22 @@ DelegationResult start(AgentRun parent, String task, String name, int timeoutSec
 
 ---
 
+## Task 6: MCP resources (P2, delivered)
+
+**Status (2026-11-17): delivered in `854ba42`.** 137 tests pass.
+
+**Goal:** let the model browse and read MCP resources without turning every one into a tool.
+
+**Design:** `McpConnection.initialize` records `capabilities.resources`; only then does `McpManager` register `mcp_<server>_list_resources`, `mcp_<server>_list_resource_templates`, and `mcp_<server>_read_resource` (URI required). Lists follow `nextCursor` up to 200 entries. `resources/read` returns text contents; `blob` becomes a size placeholder and never enters the transcript. Tool output is capped at 30,000 characters. All three tools are read-only and concurrency-safe.
+
+**Tests:** `McpResourcesTest` covers capability gating (3 tools, not 4), list/template/read output, and missing `uri`. Servers without the capability keep the old tool count (`McpHttpIntegrationTest`).
+
+**Not done:** `resources/subscribe`, prompts, and auto-injection of resource bodies.
+
+**Effort:** ~1 day (actual: one session).
+
+---
+
 ## Implementation order and dependencies
 
 | Order | Task | Depends on | Effort | Why this order |
@@ -612,6 +628,7 @@ DelegationResult start(AgentRun parent, String task, String name, int timeoutSec
 | 3 | Streaming | — | 2.5 days | UX; independent of 1/2, but touches `AgentLoop` model call |
 | 4 | Session fork | — | 2 days | Delivered `5d9977e`; lineage in snapshot JSON, reused by Task 5 |
 | 5 | Subagent delegation | Tasks 1, 4 | 4 days | Delivered `18bebe4`; per-run registry, read-only child, 2-per-parent cap |
+| 6 | MCP resources | — | 1 day | Delivered `854ba42`; capability-gated, 3 read-only tools per server |
 
 Total: ~11.5 engineering days, plus review. The first iteration is only Phase 1 (S1–S8, ~3 days); stop after S8 for review. Do not parallelize Tasks 1/2/3 on the same files; they all touch `AgentLoop.java`.
 
@@ -619,7 +636,7 @@ Total: ~11.5 engineering days, plus review. The first iteration is only Phase 1 
 
 ## Out of scope this round
 
-- MCP resources/prompts, MCP reconnect state machine, OAuth.
+- MCP prompts, resource subscriptions, MCP reconnect state machine, OAuth.
 - Skill catalog-only injection, chokidar hot reload.
 - Linux/Windows sandbox backends; changing the default from off.
 - Cordis plugin tree, profile/bundle, plugin market, desktop shell, WebSocket mux.
@@ -634,7 +651,7 @@ Total: ~11.5 engineering days, plus review. The first iteration is only Phase 1 
 
 ## Acceptance for the whole plan
 
-1. `mvn -q test` passes with 73 existing + new tests; no skipped new tests except OS-specific ones with an explicit assumption.
+1. `mvn -q test` passes with 137 tests; no skipped new tests except OS-specific ones with an explicit assumption.
 2. `java -jar target/coding-agent.jar --check` shows `overflowRecovery`, `toolInlineChars`, and (after Task 4) fork capability; no secrets.
 3. Manual smoke against a local mock server: overflow → compaction → success; 5 parallel reads; streaming text; fork + prompt; delegate read-only task.
 4. Real DeepSeek smoke (manual, not CI): one streaming call and one forced-overflow call; record the actual error code in `docs/DSH-GAP-ANALYSIS.md` if it differs from the heuristic.
