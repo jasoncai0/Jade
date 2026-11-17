@@ -17,7 +17,8 @@ const PHASE_LABEL = Object.fromEntries(PHASES.map((phase) => [phase.id, phase.la
 const PHASE_DETAIL = Object.fromEntries(PHASES.map((phase) => [phase.id, phase.detail]));
 
 const EVENT_TYPES = [
-  'run.started', 'turn.started', 'phase', 'llm.request', 'assistant', 'tool.start', 'tool.end', 'usage', 'plan',
+  'run.started', 'turn.started', 'phase', 'llm.request', 'assistant', 'assistant.delta',
+  'tool.start', 'tool.end', 'usage', 'plan',
   'workspace', 'verification', 'compaction', 'permission.request', 'permission.resolved',
   'question.request', 'question.resolved',
   'loop.detected', 'budget.exceeded', 'reflection.requested', 'reflection.recorded', 'goal.review',
@@ -63,6 +64,7 @@ const state = {
   startedAt: 0,
   finishedAt: 0,
   lastSeq: 0,
+  live: null,
   elapsedTimer: null,
   fileTimer: null,
   toastTimer: null,
@@ -755,11 +757,37 @@ function connect(id, after = 0) {
 }
 
 function stopStream() {
+  clearLive();
   if (state.es) {
     const es = state.es;
     state.es = null;
     es.close();
   }
+}
+
+/**
+ * Streaming bubble: plain text, appended per delta, thrown away once the
+ * durable assistant event lands with the authoritative content.
+ */
+function appendLiveDelta(data, timestamp) {
+  const text = data && typeof data.text === 'string' ? data.text : '';
+  if (!text || state.terminal) return;
+  if (!state.live) {
+    const { entry } = traceEntry('assistant', timestamp);
+    entry.classList.add('assistant-live-entry');
+    const body = el('div', 'assistant-text live');
+    entry.appendChild(body);
+    state.live = { entry, body };
+  }
+  state.live.body.textContent += text;
+  scrollTimeline();
+}
+
+function clearLive() {
+  if (!state.live) return;
+  const entry = state.live.entry;
+  if (entry && entry.parentNode) entry.remove();
+  state.live = null;
 }
 
 async function syncSnapshot() {
@@ -806,7 +834,12 @@ function handleEvent(type, data, timestamp, seq = 0) {
     }
 
     case 'assistant':
+      clearLive();
       addAssistant(data, timestamp);
+      break;
+
+    case 'assistant.delta':
+      appendLiveDelta(data, timestamp);
       break;
 
     case 'llm.request':
@@ -915,6 +948,7 @@ function handleEvent(type, data, timestamp, seq = 0) {
 }
 
 function beginFollowUpTurn(data, timestamp) {
+  clearLive();
   hideQuestionCard();
   state.terminal = false;
   state.finishRendered = false;
@@ -1158,6 +1192,7 @@ function addPermissionResolved(data, timestamp) {
 }
 
 function finalizeRun(snapshot) {
+  clearLive();
   hideQuestionCard();
   applySnapshot(snapshot, false);
   state.terminal = true;

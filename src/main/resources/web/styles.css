@@ -887,6 +887,25 @@ textarea:focus {
   letter-spacing: 0.03em;
 }
 
+.assistant-text.live::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 11px;
+  margin-left: 2px;
+  vertical-align: -1px;
+  background: var(--lime);
+  animation: live-caret 1s steps(2, start) infinite;
+}
+
+@keyframes live-caret {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-text.live::after { animation: none; }
+}
+
 .assistant-text {
   margin: 0;
   color: #cbd9cf;

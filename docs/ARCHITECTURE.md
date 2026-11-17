@@ -315,6 +315,7 @@ by a previous process is converted to `FAILED`.
 - `snapshot()` for a current copy
 - `after(seq)` for replay
 - `awaitAfter(seq, timeout)` for streaming
+- `subscribe(listener)` / `unsubscribe(listener)` for wake-ups after `emit`
 - `closed()` and idempotent `close()`
 
 The web endpoint sends standard SSE frames:
@@ -328,6 +329,22 @@ data: {"seq":42,"timestamp":...,"type":"tool.end","data":{...}}
 `Last-Event-ID` or `?after=N` replays from that point. A 15-second comment keeps
 proxies from closing idle connections. When the run log closes, the server sends
 `event: stream_end` and ends the response.
+
+Live model output arrives on a second, non-durable channel. `LiveDeltaBus`
+holds the throttled `assistant.delta` frames (50 ms or 512 characters,
+whichever comes first) and the SSE stream interleaves them with the durable
+events:
+
+```
+event: assistant.delta
+data: {"type":"assistant.delta","data":{"text":"Hello from ","reasoning":null}}
+```
+
+Delta frames carry no `id:` line and are never written to `RunEventLog`, MySQL,
+or `.agent/events.jsonl`: `seq` counts durable events only. A reconnecting
+client resumes at its last durable sequence and loses the deltas it missed; the
+`assistant` event that follows the same model response is the authoritative
+transcript entry, so the UI drops its live bubble when that event arrives.
 
 Key events:
 

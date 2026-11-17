@@ -454,7 +454,7 @@ Errors use the HTTP status as `code` and `data: null`.
 | GET | `/api/runs/{id}/file?path=...` | read one text file |
 | GET | `/api/runs/{id}/history?before=&limit=&compact=` | bounded event history page |
 | GET | `/api/runs/{id}/history/{seq}` | one full archived event payload |
-| GET | `/api/runs/{id}/events` | SSE stream with replay |
+| GET | `/api/runs/{id}/events` | SSE stream with replay, plus live `assistant.delta` frames |
 
 The server binds `127.0.0.1` by default. Do not expose it on a public interface:
 there is no authentication and the agent can run shell commands in its
