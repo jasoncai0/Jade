@@ -636,8 +636,8 @@ Total: ~11.5 engineering days, plus review. The first iteration is only Phase 1 
 
 ## Out of scope this round
 
-- MCP prompts, resource subscriptions, MCP reconnect state machine, OAuth.
-- Skill catalog-only injection, chokidar hot reload.
+- MCP prompts, resource subscriptions, long-running reconnect state machine, OAuth.
+- Skill hot reload (catalog-only injection shipped later; see “Post-review hardening”).
 - Linux/Windows sandbox backends; changing the default from off.
 - Cordis plugin tree, profile/bundle, plugin market, desktop shell, WebSocket mux.
 - Multi-provider routing/failover; model cost tables.
@@ -651,7 +651,7 @@ Total: ~11.5 engineering days, plus review. The first iteration is only Phase 1 
 
 ## Acceptance for the whole plan
 
-1. `mvn -q test` passes with 137 tests; no skipped new tests except OS-specific ones with an explicit assumption.
+1. `mvn -q test` passes with 143 tests; no skipped new tests except OS-specific ones with an explicit assumption.
 2. `java -jar target/coding-agent.jar --check` shows `overflowRecovery`, `toolInlineChars`, and (after Task 4) fork capability; no secrets.
 3. Manual smoke against a local mock server: overflow → compaction → success; 5 parallel reads; streaming text; fork + prompt; delegate read-only task.
 4. Real DeepSeek smoke (manual, not CI): one streaming call and one forced-overflow call; record the actual error code in `docs/DSH-GAP-ANALYSIS.md` if it differs from the heuristic.
@@ -660,6 +660,24 @@ Total: ~11.5 engineering days, plus review. The first iteration is only Phase 1 
 7. Parent run is unchanged after fork; parent transcript has only one tool result per delegation.
 
 ---
+
+## Post-review hardening (2026-11-18, delivered)
+
+After the P0/P1 review the user ordered A → B → (C only with Linux users) → D → E.
+All but C are now on local `main`:
+
+| Item | Result | Commit |
+|------|--------|--------|
+| A. spill collision | `ToolOutputStore.save` includes the model tool-call id; two same-name calls in one batch get distinct files | `edb5d9c` |
+| A. real stream smoke | official endpoint accepted `stream_options.include_usage`; text deltas and usage 11/3/14 observed | verification only |
+| B. sandbox visibility | `/api/health` exposes sandbox fields; Web banner when not `workspace-write`; default stays off | `0247b8d` |
+| D. skills catalog | `AGENT_SKILL_PRELOAD=false`; preloaded body capped at 4,000 chars | `9d321cb` |
+| E. MCP reconnect | HTTP startup retries 5× with 500 ms→30 s backoff; 4xx/invalid URL not retried | `50f0777` |
+
+C (Linux bwrap) remains out of scope until a Linux user is confirmed. This
+section supersedes the “skill catalog-only injection” and “MCP reconnect state
+machine” bullets in “Out of scope this round”; MCP reconnect here is bounded
+startup retry, not a long-running state machine.
 
 ## Handoff notes
 

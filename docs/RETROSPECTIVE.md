@@ -3,6 +3,10 @@
 > 项目：[`jasoncai0/Jade`](https://github.com/jasoncai0/Jade)（公开仓库）
 > 周期：2026-11-13 至 2026-11-16
 > 对应公开文章：<https://www.jasoncai.site/posts/coding-agent-pitfalls.html>
+>
+> 后续更新（2026-11-18）：内置工具 15 个，测试 143 个；新增流式 SSE、会话
+> fork、只读子代理、MCP resources、沙箱可见性与 Skills 目录化开关。下文
+> “12 个工具 / 60 tests”是当时快照，不再代表当前状态。
 
 ## 1. 最终形态
 

@@ -209,8 +209,10 @@ paragraph; missing `triggers` falls back to tags. Duplicate names keep the
 first and log a warning.
 
 Ranking is lexical: trigger hit ×3, tag hit ×2, name hit ×4. The top two
-matches are injected in full into the system prompt. The full catalog is always
-present, and `load_skill` can fetch any playbook on demand. Skills are
+matches are injected into the system prompt, each capped at 4,000 characters;
+longer bodies are replaced by the description plus a `load_skill` pointer. The
+full catalog is always present, and `load_skill` can fetch any playbook on
+demand. `AGENT_SKILL_PRELOAD=false` switches to catalog-only mode. Skills are
 instructions, not executable tools.
 
 ## 7. Context compaction
@@ -315,6 +317,10 @@ asks in `balanced` mode. Approval scope is per run; a GitHub write therefore
 requires an explicit decision. A failed server is recorded in `/api/mcp` and
 skipped; it never prevents the rest of Jade from starting. Tokens are expanded
 from environment variables at load time and are never written to events.
+
+Startup connects use bounded backoff for HTTP servers: 5 attempts, 500 ms
+initial delay, 30 s cap, no retry on HTTP 4xx or an invalid URL. `/api/mcp`
+reports `attempts` per server. Stdio servers keep a single attempt.
 
 MCP v1 deliberately covers tools and resources: no prompts, sampling,
 elicitation, OAuth flow, or automatic server installation.

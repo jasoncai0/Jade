@@ -62,7 +62,7 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 | 14 | 模型路由/重试 | adapter 注册；`model.select()` 只作用下一个未准备 step；**无自动 failover**；normal 默认 5 次重试、500ms 起、上限 10s、抖动 0.1（`D/subsystems/llm-streaming.md:437-461`；`P/dsh-llm/src/retry-policy.ts:15-25`） | 单 `DEEPSEEK_MODEL`；自定义网关；429/5xx/超时重试 3 次，700ms 指数 + 抖动；400/401 不重试（`J/src/main/java/io/github/jasoncai0/agent/llm/DeepSeekClient.java:28,97-122,256-268`） | 低 | 低 | P2 | DSH 也没有模型 fallback；Jade 的重试已覆盖大部分；多 provider 不是本轮目标 |
 | 15 | 可观测性 | session telemetry ledger/ops、OTel 适配器、token 投影、session inspector（`D/subsystems/session-telemetry.md:31-60`；`P/dsh-token-meter/README.md:49`） | SSE 事件、`llm.request` 完整请求体、usage、MySQL 历史、Web trace 折叠（`J/README.md:217-228`；`J/src/main/java/io/github/jasoncai0/agent/web/WebServer.java:387-434`） | 低 | 中 | — | Jade 的本地 trace 已够用；OTel 是产品层 |
 | 16 | CLI / Web UI | WebSocket mux（不是 SSE）、桌面 Electron、headless、ACP、SDK（`D/subsystems/web-server.md:5,47`；`P/dsh-api-gateway/src/stream-protocol.ts:7`） | `check/ping/headless/serve` 四模式；本地 HTTP + SSE；1,879 行原生 JS；无鉴权、127.0.0.1（`J/src/main/java/io/github/jasoncai0/agent/web/WebServer.java:46,244,387-434`；`J/src/main/resources/web/app.js:713`） | 低 | 中 | — | 形态不同；不需要为了“像 DSH”重写 WebSocket/桌面壳 |
-| 17 | 测试/发布/扩展 | Cordis 插件树、profile/bundle、plugin_manager；测试源码不随 asar 发布；testkit/回放/mock server 在 devDependencies（`D/architecture.md:15-43`；`D/tool-catalog.md`；`P/dsh/package.json`） | 26 个测试文件、137 个 `@Test`；ServiceLoader `ToolProvider`；shade 单 jar；无插件市场（`J/pom.xml`；`J/src/main/java/io/github/jasoncai0/agent/tool/ToolProvider.java`） | 低 | 低 | — | Cordis 是 DSH 的产品外壳；Jade 的 ServiceLoader 已够扩展 |
+| 17 | 测试/发布/扩展 | Cordis 插件树、profile/bundle、plugin_manager；测试源码不随 asar 发布；testkit/回放/mock server 在 devDependencies（`D/architecture.md:15-43`；`D/tool-catalog.md`；`P/dsh/package.json`） | 26 个测试文件、143 个 `@Test`；ServiceLoader `ToolProvider`；shade 单 jar；无插件市场（`J/pom.xml`；`J/src/main/java/io/github/jasoncai0/agent/tool/ToolProvider.java`） | 低 | 低 | — | Cordis 是 DSH 的产品外壳；Jade 的 ServiceLoader 已够扩展 |
 
 ## 3. Top 5–8 差距
 
@@ -187,7 +187,7 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 - **MySQL 持久化 + 启动恢复**：200 个会话、RUNNING→FAILED、SSE 重放（`AgentService.java:58,397-472`；`RunState.java:59-78`）。
 - **Goal review**：无工具 JSON 复核，连续 3 次拒绝失败（`AgentLoop.java:346-376`；`LlmGoalReviewer.java:26-81`）。
 - **单 jar、Jackson-only、无 Cordis**：安装/调试成本低，代码可读。
-- **137 个测试**：覆盖循环、压缩、权限、MCP stdio/HTTP、MySQL；比“功能多但测试不随产物发布”的 DSH 更容易本地回归。
+- **143 个测试**：覆盖循环、压缩、权限、MCP stdio/HTTP、MySQL；比“功能多但测试不随产物发布”的 DSH 更容易本地回归。
 
 ## 6. 建议顺序与评审点
 
@@ -234,7 +234,7 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 - Web/SSE：`J/src/main/java/io/github/jasoncai0/agent/web/WebServer.java:387-434`；`J/src/main/resources/web/app.js:713,730,808-816`
 - MCP/Skills：`J/src/main/java/io/github/jasoncai0/agent/mcp/McpConnection.java:55,77,149`；`J/src/main/java/io/github/jasoncai0/agent/skill/SkillRegistry.java:36-97`
 
-## 8. 实现状态（2026-11-17 晚更新）
+## 8. 实现状态（2026-11-18 更新）
 
 上面的矩阵是 `5772293` 时刻的快照。P0 与流式 P1 已按配套计划落地，提交在本地 `main`（未推送）：
 
@@ -248,7 +248,19 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 | 只读子代理（P1-3） | 已完成，`delegate_task` 每父最多 2 并发、深度 1、独立 transcript，父只收摘要 | `18bebe4` |
 | MCP resources（P2-1） | 已完成，按 `capabilities.resources` 注册 3 个只读工具；列表分页 200、binary 占位 | `854ba42` |
 
-矩阵第 6、7 行（真流式、fork）、第 2 行（并行）与第 3 行（子代理）现在描述的是历史缺口，不再是当前状态。仍然未做：MCP prompts、跨平台沙箱、插件/预设体系、成本折算。
+矩阵第 6、7 行（真流式、fork）、第 2 行（并行）与第 3 行（子代理）现在描述的是历史缺口，不再是当前状态。
+
+评审后加固定（2026-11-18，均已在本地 `main`）：
+
+| 项 | 状态 | 提交 |
+|----|------|------|
+| A. spill 同名碰撞 | 已修：文件名加入模型 tool-call id，同批两个 `read_file` 各自落盘可回读 | `edb5d9c` |
+| A. 真实流式烟测 | 官方 `api.deepseek.com` 接受 `stream_options.include_usage`；收到 `stream-ok` 分片与 usage 11/3/14 | 验证记录，无提交 |
+| B. 沙箱可见性 | `/api/health` 暴露 sandbox 字段；Web 非 `workspace-write` 时显示 banner；默认仍 off | `0247b8d` |
+| D. Skills 目录化 | `AGENT_SKILL_PRELOAD=false` 仅放 catalog；预载正文单条上限 4,000 字符 | `9d321cb` |
+| E. MCP HTTP 重连 | 启动连接 5 次退避（500 ms→30 s），4xx/非法 URL 不重试；状态记 attempts | `50f0777` |
+
+仍然未做：MCP prompts、跨平台沙箱、插件/预设体系、成本折算。
 
 ## 9. 未验证/待补证据
 
@@ -256,4 +268,4 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 - DSH `fork` 子代理前缀继承的源码行：仅读文档/注释。
 - DSH 测试门禁与覆盖率：asar 不含测试源码。
 - DSH MCP `tools/list_changed` 与 HTTP 会话续期：文档未给出完整结论。
-- Jade 真实 DeepSeek 的溢出错误体与 SSE 分块格式：本轮无真实调用，计划用 mock server；上线前需用真实 key 手工验证。
+- Jade 真实 DeepSeek 的 SSE 分块与 `stream_options`：已用真实 key 冒烟通过；溢出错误体仍只由 mock server 验证，未用真实超长请求触发。

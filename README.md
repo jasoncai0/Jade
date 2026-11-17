@@ -334,8 +334,10 @@ under `.agent/subagents/<childRunId>/` and its own SSE stream at
 
 Skills are markdown playbooks with YAML frontmatter. Jade discovers every
 `SKILL.md` under `skills/` (depth 3), puts a compact catalog in the system
-prompt, preloads the two best matches for the task, and exposes `load_skill` for
-on-demand loading. Six playbooks ship with the demo:
+prompt, preloads the two best matches for the task (each capped at 4,000
+characters), and exposes `load_skill` for on-demand loading. Set
+`AGENT_SKILL_PRELOAD=false` to keep only the catalog and load every body on
+demand. Six playbooks ship with the demo:
 
 - `skills/java-cli/SKILL.md` — build, compile, and execute a Java CLI
 - `skills/java-tdd/SKILL.md` — failing check first, then implementation
@@ -573,6 +575,7 @@ Environment variables take precedence over `.env`:
 | `AGENT_HOST` | `127.0.0.1` | HTTP bind address |
 | `AGENT_PORT` | `8080` | HTTP port, `0` chooses a free port |
 | `AGENT_SKILLS_DIR` | `skills` | skill root |
+| `AGENT_SKILL_PRELOAD` | `true` | preload top-2 skill bodies (≤4,000 chars each); `false` = catalog only, load on demand |
 | `AGENT_WORKSPACES_DIR` | `agent-workspaces` | run root |
 | `JADE_MCP_CONFIG` | `mcp.json` | MCP server config; missing file disables MCP |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | empty | GitHub PAT referenced by the example MCP config |
@@ -583,7 +586,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 73 tests:
+The suite has 143 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -625,6 +628,8 @@ The suite has 73 tests:
   the kernel are shared with the host.
 - The shell still has a sanitized environment and a small destructive-command
   blocklist (`sudo`, `mkfs`, `dd` to block devices, fork bombs, `rm -rf /`).
+  The Web UI shows a banner whenever the sandbox is not `workspace-write`, so
+  local execution is visible rather than implicit.
 - API keys are redacted from structured logs and omitted from `/api/config`.
 - The HTTP server is unauthenticated; keep it on localhost.
 
