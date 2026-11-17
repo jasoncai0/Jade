@@ -52,6 +52,15 @@ public final class ToolOutputStore {
     }
 
     public ToolOutputRef save(String runId, long seq, String toolName, String output) {
+        return save(runId, seq, toolName, "", output);
+    }
+
+    /**
+     * Persists one tool output. The model tool-call id is part of the filename
+     * so two calls to the same tool in one batch cannot collide: both share the
+     * same log sequence, and the second CREATE_NEW would otherwise fail.
+     */
+    public ToolOutputRef save(String runId, long seq, String toolName, String callId, String output) {
         String text = output == null ? "" : output;
         if (text.length() <= MAX_INLINE_CHARS) {
             return new ToolOutputRef("", 0, text.length(), false);
@@ -59,12 +68,15 @@ public final class ToolOutputStore {
 
         String safeRun = safeSegment(runId, "run", 64);
         String safeTool = safeSegment(toolName, "tool", 40);
+        String safeCall = callId == null || callId.isBlank()
+                ? ""
+                : "-" + safeSegment(callId, "call", 48);
         long safeSeq = Math.max(0, seq);
         Path directory = spillRoot.resolve(safeRun).normalize();
         if (!directory.startsWith(spillRoot)) {
             throw new WorkspaceException("Invalid spill directory for run: " + runId);
         }
-        Path target = directory.resolve(safeSeq + "-" + safeTool + ".txt").normalize();
+        Path target = directory.resolve(safeSeq + "-" + safeTool + safeCall + ".txt").normalize();
         if (!target.startsWith(directory)) {
             throw new WorkspaceException("Invalid spill file for tool: " + toolName);
         }

@@ -65,6 +65,33 @@ class AgentLoopSpillIntegrationTest {
     }
 
     @Test
+    void twoCallsToTheSameToolInOneBatchGetSeparateSpillFiles() throws Exception {
+        String output = "FIRST LINE\n" + "z".repeat(34_970) + "\nLAST_ERROR: shared";
+        Harness harness = harness(new LargeOutputTool(output));
+        harness.llm().script.clear();
+        harness.llm().script.add(new ChatResult(null, null,
+                List.of(new ToolCall("call-a", "big_output", "{}"),
+                        new ToolCall("call-b", "big_output", "{}")),
+                "tool_calls", new Usage(10, 5, 15)));
+        harness.llm().script.add(new ChatResult("done", null, List.of(), "stop", new Usage(20, 8, 28)));
+
+        RunSnapshot snapshot = harness.loop().run("trigger two large outputs",
+                harness.workspace(), harness.state(), harness.events(), harness.control());
+
+        assertEquals("SUCCEEDED", snapshot.status());
+        List<String> paths = toolEndOutputs(harness.events(), "big_output").stream()
+                .map(AgentLoopSpillIntegrationTest::extractSpillPath)
+                .toList();
+        assertEquals(2, paths.size());
+        assertTrue(!paths.get(0).equals(paths.get(1)), paths.toString());
+        for (String relative : paths) {
+            Path spill = harness.workspace().root().resolve(relative);
+            assertTrue(Files.isRegularFile(spill), "missing spill file " + spill);
+            assertEquals(output, Files.readString(spill));
+        }
+    }
+
+    @Test
     void outputUnderTheLimitStaysUnchangedAndWritesNoFile() throws Exception {
         String output = "small line\n" + "y".repeat(29_000);
         Harness harness = harness(new LargeOutputTool(output));
@@ -79,12 +106,15 @@ class AgentLoopSpillIntegrationTest {
     }
 
     private static String toolEndOutput(RunEventLog events, String name) {
+        return toolEndOutputs(events, name).get(0);
+    }
+
+    private static List<String> toolEndOutputs(RunEventLog events, String name) {
         return events.snapshot().stream()
                 .filter(event -> event.type().equals("tool.end"))
                 .filter(event -> name.equals(event.data().get("name")))
                 .map(event -> String.valueOf(event.data().get("output")))
-                .findFirst()
-                .orElseThrow();
+                .toList();
     }
 
     private static String toolMessage(ChatRequest request, String name) {

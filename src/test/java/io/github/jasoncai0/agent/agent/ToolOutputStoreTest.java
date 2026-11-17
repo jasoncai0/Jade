@@ -43,6 +43,23 @@ class ToolOutputStoreTest {
     }
 
     @Test
+    void sameSequenceAndToolWithDifferentCallIdsDoNotCollide() throws IOException {
+        Path root = Files.createDirectories(temp.resolve("ws"));
+        ToolOutputStore store = new ToolOutputStore(root);
+        String first = "FIRST " + "a".repeat(31_000);
+        String second = "SECOND " + "b".repeat(31_000);
+
+        ToolOutputRef a = store.save("run-1", 7, "read_file", "call-a", first);
+        ToolOutputRef b = store.save("run-1", 7, "read_file", "call-b", second);
+
+        assertTrue(a.spilled());
+        assertTrue(b.spilled());
+        assertTrue(!a.relativePath().equals(b.relativePath()));
+        assertEquals(first, Files.readString(root.resolve(a.relativePath()), StandardCharsets.UTF_8));
+        assertEquals(second, Files.readString(root.resolve(b.relativePath()), StandardCharsets.UTF_8));
+    }
+
+    @Test
     void leavesBoundarySizedOutputAlone() throws IOException {
         Path root = Files.createDirectories(temp.resolve("ws"));
         ToolOutputStore store = new ToolOutputStore(root);

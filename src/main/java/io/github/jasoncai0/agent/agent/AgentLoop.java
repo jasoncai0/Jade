@@ -639,7 +639,7 @@ public final class AgentLoop {
             }
             String output;
             try {
-                ToolOutputRef ref = spill.save(state.id(), log.lastSeq(), item.call.name(), result.output());
+                ToolOutputRef ref = spill.save(state.id(), log.lastSeq(), item.call.name(), item.call.id(), result.output());
                 output = spill.inline(result.output(), ref);
             } catch (WorkspaceException e) {
                 output = truncate(result.output(), MAX_TOOL_OUTPUT_CHARS)
