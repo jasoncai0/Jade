@@ -189,6 +189,10 @@ public final class WebServer implements AutoCloseable {
             followUp(exchange, id);
             return;
         }
+        if (action.equals("fork") && method.equals("POST")) {
+            forkRun(exchange, id);
+            return;
+        }
         if (action.equals("permissions") && method.equals("GET")) {
             PermissionRequest pending = agentService.pendingPermission(id);
             Map<String, Object> data = new LinkedHashMap<>();
@@ -309,6 +313,17 @@ public final class WebServer implements AutoCloseable {
         } catch (IllegalArgumentException e) {
             sendError(exchange, 400, e.getMessage());
         }
+    }
+
+    private void forkRun(HttpExchange exchange, String id) throws IOException {
+        JsonNode body = readJson(exchange);
+        String name = body != null && body.isObject() ? body.path("name").asText(null) : null;
+        AgentService.ForkResult result = agentService.fork(id, name);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("run", agentService.require(result.runId()).snapshot());
+        data.put("parentRunId", result.parentRunId());
+        data.put("eventsUrl", "/api/runs/" + result.runId() + "/events");
+        sendData(exchange, 201, data);
     }
 
     private void followUp(HttpExchange exchange, String id) throws IOException {

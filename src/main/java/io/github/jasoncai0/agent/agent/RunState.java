@@ -29,6 +29,8 @@ public final class RunState {
     private volatile String transcriptPath;
     private volatile PermissionRequest pendingPermission;
     private volatile QuestionRequest pendingQuestion;
+    private volatile String parentRunId;
+    private volatile Long forkSeq;
 
     public RunState(String id, String task, String workspace, int maxSteps) {
         this(id, task, workspace, maxSteps, System.currentTimeMillis());
@@ -69,6 +71,8 @@ public final class RunState {
         state.verification = snapshot.verification();
         state.finishedAt = snapshot.finishedAt();
         state.transcriptPath = snapshot.transcriptPath();
+        state.parentRunId = snapshot.parentRunId();
+        state.forkSeq = snapshot.forkSeq();
         if (!snapshot.terminal()) {
             state.status = RunStatus.FAILED.name();
             state.error = "Run was interrupted by a server restart";
@@ -251,6 +255,14 @@ public final class RunState {
         finishedAt = System.currentTimeMillis();
     }
 
+    public String parentRunId() {
+        return parentRunId;
+    }
+
+    public Long forkSeq() {
+        return forkSeq;
+    }
+
     public synchronized void setTranscriptPath(String path) {
         transcriptPath = path;
     }
@@ -273,7 +285,9 @@ public final class RunState {
                 verification,
                 startedAt,
                 finishedAt,
-                transcriptPath
+                transcriptPath,
+                parentRunId,
+                forkSeq
         );
     }
 

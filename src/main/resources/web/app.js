@@ -295,6 +295,7 @@ function renderRunList() {
     const id = el('span', 'run-item-id', shortId(run.id));
     const chip = el('span', `mini-status ${statusClass(status)}`, STATUS_TEXT[status] || status.toLowerCase());
     meta.append(id, chip);
+    if (run.parentRunId) meta.append(el('span', 'mini-status', 'fork'));
     button.append(task, meta);
     button.addEventListener('click', () => selectRun(run.id));
     list.appendChild(button);
@@ -507,6 +508,7 @@ function setRunStatus(status) {
   const active = normalized === 'RUNNING' || normalized === 'QUEUED'
     || normalized === 'WAITING_APPROVAL' || normalized === 'WAITING_INPUT';
   $('cancelBtn').hidden = !active;
+  $('forkBtn').hidden = !isTerminal(normalized);
   $('telemetryLive').classList.toggle('on', normalized === 'RUNNING');
   if (normalized === 'RUNNING') {
     startTimer();
@@ -1675,6 +1677,24 @@ function newRun() {
   $('taskInput').focus();
 }
 
+async function forkRun() {
+  const id = state.selectedId;
+  if (!id) return;
+  const button = $('forkBtn');
+  button.disabled = true;
+  try {
+    const data = await api(`/api/runs/${encodeURIComponent(id)}/fork`, { method: 'POST', body: '{}' });
+    state.runs = [data.run, ...state.runs.filter((run) => run.id !== data.run.id)];
+    renderRunList();
+    await selectRun(data.run.id);
+    toast('Forked into a new session. Send a message to continue from here.');
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function cancelRun() {
   const id = state.selectedId;
   if (!id) return;
@@ -1870,6 +1890,7 @@ function wireEvents() {
   });
   $('startBtn').addEventListener('click', startRun);
   $('cancelBtn').addEventListener('click', cancelRun);
+  $('forkBtn').addEventListener('click', forkRun);
   $('newRunBtn').addEventListener('click', newRun);
   $('traceOrderAsc').addEventListener('click', () => setTraceOrder('asc'));
   $('traceOrderDesc').addEventListener('click', () => setTraceOrder('desc'));

@@ -165,6 +165,15 @@ appends a user message to the transcript, and runs another bounded turn in the
 same workspace. `New run` creates a new isolated workspace. Delete a workspace
 directory to remove that session permanently.
 
+A terminal session can be forked: `POST /api/runs/{id}/fork` with an optional
+`{"name"}` copies the workspace and transcript into a new session and returns
+`201` with `{run, parentRunId, eventsUrl}`. The fork keeps the parent's history,
+plan, verification and spilled tool output, but future turns diverge: edits in
+the fork never touch the parent. Build output, VCS metadata and dependency
+directories are not copied, and the fork starts idle until the first follow-up
+message. The console exposes this as the `Fork` button on a finished session;
+the parent link is shown in the session list.
+
 
 ### Goal mode
 
@@ -444,6 +453,7 @@ Errors use the HTTP status as `code` and `data: null`.
 | GET | `/api/runs` | run snapshots, newest first |
 | POST | `/api/runs` | start `{task, workspace?}`; returns 202 |
 | POST | `/api/runs/{id}/messages` | follow up `{message}` in the same session; returns 202 |
+| POST | `/api/runs/{id}/fork` | fork a finished session `{name?}`; returns 201 with `{run, parentRunId, eventsUrl}` |
 | GET | `/api/runs/{id}/permissions` | pending approval requests |
 | POST | `/api/runs/{id}/permissions/{requestId}` | resolve `{decision, scope}` |
 | GET | `/api/runs/{id}/questions` | pending ask_user decision |
@@ -624,7 +634,9 @@ docs/                             architecture and demo script
 - No debugger integration (`jdb`, `pdb`, Node inspector). Debugging means
   reading compiler/runtime output, reproducing the failure, and repairing the
   source.
-- No database. Sessions are files under `agent-workspaces/`; follow-ups append
-  linearly to one transcript. There is no branch, fork, or concurrent-chat model.
+- Forks are copies, not branches: there is no diff, merge or reconciliation
+  between a parent and its fork, and sibling forks cannot be combined
+  automatically. A fork also copies the workspace at the moment it is created,
+  so later parent edits are not visible to it.
 - The live DeepSeek call is not part of the automated suite because it needs a
   user key; the HTTP layer is tested against a local fake endpoint instead.

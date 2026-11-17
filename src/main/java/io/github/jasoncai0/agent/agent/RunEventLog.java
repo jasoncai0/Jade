@@ -71,6 +71,19 @@ public final class RunEventLog {
         return event;
     }
 
+    /**
+     * Appends a pre-built event, keeping its original sequence and timestamp.
+     * Used when a forked session copies its parent's history.
+     */
+    public synchronized AgentEvent append(AgentEvent event) {
+        events.add(event);
+        nextSeq = Math.max(nextSeq, event.seq() + 1);
+        if (store != null && runId != null) {
+            store.append(runId, event);
+        }
+        return event;
+    }
+
     /** Registers a cheap callback fired after every emit, outside the lock. */
     public void subscribe(Runnable wakeup) {
         wakeups.add(wakeup);

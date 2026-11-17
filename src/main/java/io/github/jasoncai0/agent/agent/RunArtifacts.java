@@ -76,6 +76,12 @@ public final class RunArtifacts {
             root.put("startedAt", snapshot.startedAt());
             root.put("finishedAt", snapshot.finishedAt());
             root.put("transcriptPath", snapshot.transcriptPath());
+            if (snapshot.parentRunId() != null) {
+                root.put("parentRunId", snapshot.parentRunId());
+            }
+            if (snapshot.forkSeq() != null) {
+                root.put("forkSeq", snapshot.forkSeq());
+            }
             root.put("usage", JSON.valueToTree(snapshot.usage()));
             root.set("plan", JSON.valueToTree(snapshot.plan()));
             root.set("files", JSON.valueToTree(snapshot.files()));
@@ -130,8 +136,12 @@ public final class RunArtifacts {
         try {
             List<AgentEvent> events = loadEvents(dir.resolve("events.jsonl"));
             RunSnapshot snapshot = terminalSnapshot(events);
+            RunSnapshot fromTranscript = snapshotFromTranscript(transcript, workspaceRoot);
             if (snapshot == null) {
-                snapshot = snapshotFromTranscript(transcript, workspaceRoot);
+                snapshot = fromTranscript;
+            } else if (snapshot.parentRunId() == null && fromTranscript != null
+                    && fromTranscript.parentRunId() != null) {
+                snapshot = snapshot.withFork(fromTranscript.parentRunId(), fromTranscript.forkSeq());
             }
             if (snapshot == null) {
                 return Optional.empty();
@@ -279,6 +289,10 @@ public final class RunArtifacts {
         if (files == null) {
             files = List.of();
         }
+        String parentRunId = text(root, "parentRunId", null);
+        Long forkSeq = root.has("forkSeq") && !root.get("forkSeq").isNull()
+                ? root.get("forkSeq").asLong()
+                : null;
         Usage usage = Usage.ZERO;
         if (root.has("usage") && !root.get("usage").isNull()) {
             try {
@@ -288,7 +302,8 @@ public final class RunArtifacts {
             }
         }
         return new RunSnapshot(id, task, workspace, status, phase, phaseLabel, step, maxSteps,
-                plan, files, usage, finalAnswer, error, verification, startedAt, finishedAt, TRANSCRIPT);
+                plan, files, usage, finalAnswer, error, verification, startedAt, finishedAt, TRANSCRIPT,
+                parentRunId, forkSeq);
     }
 
     private static RunSnapshot normalize(RunSnapshot snapshot, Path workspaceRoot) {
@@ -320,11 +335,13 @@ public final class RunArtifacts {
             return new RunSnapshot(id, task, workspace, RunStatus.FAILED.name(), phase, phaseLabel,
                     snapshot.step(), snapshot.maxSteps(), plan, files, usage, snapshot.finalAnswer(),
                     "Run was interrupted by a server restart", snapshot.verification(),
-                    snapshot.startedAt(), System.currentTimeMillis(), transcriptPath);
+                    snapshot.startedAt(), System.currentTimeMillis(), transcriptPath,
+                    snapshot.parentRunId(), snapshot.forkSeq());
         }
         return new RunSnapshot(id, task, workspace, status, phase, phaseLabel, snapshot.step(),
                 snapshot.maxSteps(), plan, files, usage, snapshot.finalAnswer(), snapshot.error(),
-                snapshot.verification(), snapshot.startedAt(), snapshot.finishedAt(), transcriptPath);
+                snapshot.verification(), snapshot.startedAt(), snapshot.finishedAt(), transcriptPath,
+                snapshot.parentRunId(), snapshot.forkSeq());
     }
 
     private static <T> List<T> readList(JsonNode node, TypeReference<List<T>> type) {

@@ -22,7 +22,7 @@ public record AppConfig(
                      AgentSettings agent, ServerSettings server) {
         this(projectRoot, skillsDir, workspacesDir, llm, agent, server, null);
     }
-    public static final String VERSION = "1.0.0";
+    public static final String VERSION = "1.1.0";
 
     public static AppConfig load(Path cwd) {
         Path root = cwd.toAbsolutePath().normalize();

@@ -1,10 +1,12 @@
 package io.github.jasoncai0.agent.agent;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
 import io.github.jasoncai0.agent.history.EventStore;
 import io.github.jasoncai0.agent.history.MySqlEventStore;
 import io.github.jasoncai0.agent.language.Language;
+import io.github.jasoncai0.agent.llm.ChatMessage;
 import io.github.jasoncai0.agent.llm.DeepSeekClient;
 import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.mcp.McpManager;
@@ -22,6 +24,7 @@ import io.github.jasoncai0.agent.question.QuestionRequest;
 import io.github.jasoncai0.agent.workspace.CommandRunner;
 import io.github.jasoncai0.agent.workspace.CommandSandbox;
 import io.github.jasoncai0.agent.workspace.Workspace;
+import io.github.jasoncai0.agent.workspace.WorkspaceFork;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -52,6 +55,7 @@ import java.util.stream.Stream;
  * Each run gets a sibling directory under agent-workspaces/.
  */
 public final class AgentService implements AutoCloseable {
+    private static final ObjectMapper REBASE_MAPPER = new ObjectMapper();
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private static final int MAX_TASK_CHARS = 20_000;
     private static final int MAX_MESSAGE_CHARS = 20_000;
@@ -215,6 +219,170 @@ public final class AgentService implements AutoCloseable {
         }
         Log.info("agent.turn.queued", Map.of("runId", id, "messageChars", clean.length()));
         return run.snapshot();
+    }
+
+    /** New run id plus the parent it was copied from. */
+    public record ForkResult(String runId, String parentRunId, String workspace) {
+    }
+
+    /**
+     * Copies a finished session into a new, independent session: workspace,
+     * transcript prefix and event history. The fork starts terminal and idle;
+     * the first follow-up message opens a new turn in the copied workspace.
+     */
+    public ForkResult fork(String parentId, String name) {
+        if (closed) {
+            throw new IllegalStateException("Agent service is shutting down");
+        }
+        AgentRun parent = require(parentId);
+        RunSnapshot parentSnapshot = parent.snapshot();
+        if (parent.running() || !parentSnapshot.terminal()) {
+            throw new IllegalStateException("Only a finished session can be forked");
+        }
+        Path source = parent.workspace().root();
+        String parentWorkspace = parentSnapshot.workspace();
+        String newId = "fork-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        Workspace target;
+        String directoryName;
+        synchronized (startLock) {
+            String base = name == null || name.isBlank()
+                    ? validateName(parentWorkspace)
+                    : validateName(name);
+            directoryName = base + "-fork-" + java.util.UUID.randomUUID().toString().substring(0, 6);
+            Path directory = config.workspacesDir().resolve(directoryName).normalize();
+            if (!directory.startsWith(config.workspacesDir())) {
+                throw new IllegalArgumentException("Invalid workspace name");
+            }
+            if (Files.exists(directory)) {
+                throw new IllegalArgumentException("Workspace already exists: " + directoryName);
+            }
+            target = Workspace.open(directory);
+            WorkspaceFork.copy(source, target.root());
+        }
+
+        List<ChatMessage> messages = RunArtifacts.loadMessages(source);
+        List<AgentEvent> parentEvents = loadForkEvents(parent);
+        long forkSeq = parentEvents.stream().mapToLong(AgentEvent::seq).max().orElse(0L);
+        long now = System.currentTimeMillis();
+        List<String> files = target.listFiles(500, 8).stream()
+                .map(Workspace.FileEntry::path)
+                .toList();
+        RunSnapshot forkSnapshot = new RunSnapshot(
+                newId,
+                parentSnapshot.task(),
+                directoryName,
+                parentSnapshot.status(),
+                parentSnapshot.phase(),
+                parentSnapshot.phaseLabel(),
+                parentSnapshot.step(),
+                parentSnapshot.maxSteps(),
+                parentSnapshot.plan(),
+                files,
+                parentSnapshot.usage(),
+                parentSnapshot.finalAnswer(),
+                parentSnapshot.error(),
+                parentSnapshot.verification(),
+                now,
+                now,
+                ".agent/transcript.json",
+                parentId,
+                forkSeq
+        );
+        RunState state = RunState.restore(forkSnapshot);
+        RunEventLog events = new RunEventLog(newId, eventStore);
+        for (AgentEvent event : parentEvents) {
+            events.append(new AgentEvent(event.seq(), event.timestamp(), event.type(),
+                    rebase(event.data(), parentId, newId, parentWorkspace, directoryName)));
+        }
+        events.append(new AgentEvent(forkSeq + 1, now, "fork.created", Map.of(
+                "parentRunId", parentId,
+                "parentSeq", forkSeq,
+                "workspace", directoryName,
+                "task", parentSnapshot.task()
+        )));
+        events.close();
+
+        AgentRun run = new AgentRun(newId, target, state, events);
+        runs.put(newId, run);
+        RunArtifacts.persist(target, state.snapshot(), messages, events);
+        if (eventStore != null) {
+            eventStore.saveSnapshot(state.snapshot());
+        }
+        Log.info("agent.run.forked", Map.of(
+                "runId", newId,
+                "parentRunId", parentId,
+                "workspace", directoryName,
+                "events", parentEvents.size()
+        ));
+        return new ForkResult(newId, parentId, directoryName);
+    }
+
+    private List<AgentEvent> loadForkEvents(AgentRun parent) {
+        List<AgentEvent> events = new ArrayList<>();
+        if (eventStore != null) {
+            long before = 0;
+            while (events.size() < 20_000) {
+                EventStore.Page page = eventStore.page(parent.id(), before, 500, true);
+                events.addAll(page.events());
+                if (!page.hasMore()) {
+                    break;
+                }
+                before = page.nextBefore();
+            }
+        } else {
+            events.addAll(RunArtifacts.load(parent.workspace().root())
+                    .map(RunArtifacts.StoredRun::events)
+                    .orElse(List.of()));
+        }
+        events.sort(Comparator.comparingLong(AgentEvent::seq));
+        if (events.size() > 20_000) {
+            events = new ArrayList<>(events.subList(events.size() - 20_000, events.size()));
+        }
+        return events;
+    }
+
+    /**
+     * Rewrites the parent's id and workspace inside a copied event payload so a
+     * fork never claims the parent's identity in the UI or in snapshot fields.
+     */
+    private static Map<String, Object> rebase(Map<String, Object> data, String parentId,
+                                              String newId, String parentWorkspace,
+                                              String newWorkspace) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) rebaseValue(
+                data, parentId, newId, parentWorkspace, newWorkspace);
+        return result == null ? Map.of() : result;
+    }
+
+    private static Object rebaseValue(Object value, String parentId, String newId,
+                                      String parentWorkspace, String newWorkspace) {
+        if (value != null && value.getClass().isRecord()) {
+            Object converted = REBASE_MAPPER.convertValue(value, Object.class);
+            return rebaseValue(converted, parentId, newId, parentWorkspace, newWorkspace);
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                Object nested = entry.getValue();
+                if (("id".equals(key) || "runId".equals(key)) && parentId.equals(nested)) {
+                    out.put(key, newId);
+                } else if ("workspace".equals(key) && parentWorkspace.equals(nested)) {
+                    out.put(key, newWorkspace);
+                } else {
+                    out.put(key, rebaseValue(nested, parentId, newId, parentWorkspace, newWorkspace));
+                }
+            }
+            return out;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> out = new ArrayList<>(list.size());
+            for (Object item : list) {
+                out.add(rebaseValue(item, parentId, newId, parentWorkspace, newWorkspace));
+            }
+            return out;
+        }
+        return value;
     }
 
     private void executeTurn(AgentRun run, RunControl control,

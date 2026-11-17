@@ -101,6 +101,16 @@ remains open between turns so the browser keeps one SSE connection. A follow-up
 reopens a restored session's log, appends the user message to the transcript,
 and runs another bounded turn in the same workspace.
 
+`AgentService.fork(parentId, name)` copies a terminal session instead of
+continuing it. The new run gets its own id (`fork-*`), workspace, transcript and
+event log; `RunSnapshot.parentRunId`/`forkSeq` record the lineage. Workspace
+files are copied with `WorkspaceFork` (20,000 files / 200 MiB cap, symlinks
+rejected, `.git`, `.agent`, build output and dependency directories skipped;
+`.agent/tool-results` is copied so spilled output still resolves). Parent events
+are replayed into the new log with `id`, `runId` and `workspace` rewritten, then
+one `fork.created` event is appended. A fork is created idle: it accepts a
+follow-up like any terminal session, but its later turns never touch the parent.
+
 `maxToolCallsPerStep` does not drop calls. Calls beyond the limit receive a tool
 message explaining the limit, so the assistant/tool pairing stays valid.
 
@@ -351,6 +361,7 @@ Key events:
 | Event | Data |
 |-------|------|
 | `run.started` | initial `snapshot` |
+| `fork.created` | `parentRunId`, `parentSeq`, `workspace`, copied event count |
 | `turn.started` | follow-up `message`, `snapshot` |
 | `phase` | `phase`, `label`, `description`, `detail`, `step`, `maxSteps` |
 | `llm.request` | exact request `body`, `step`, `messages`, `tools`, `chars` |
