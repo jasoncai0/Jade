@@ -535,6 +535,14 @@ record ForkResult(String runId, String parentRunId, String workspace) {}
 
 ## Task 5: Read-only subagent delegation (P1)
 
+**Status (2026-11-17): delivered in `18bebe4`.** 136 tests pass. Deviations from the design below:
+- `delegate_task` is registered per parent run in `AgentService.toolsForRun`, not in `BuiltInTools`; the startup tool count stays 15.
+- The child's guessed write tool is rejected by the `READ_ONLY` permission broker before registry lookup, so the transcript says `Permission denied` rather than `Unknown tool`. The child's advertised tool list still excludes every writer; both layers are tested.
+- `subagent.end` records `tokens` and `filesRead` instead of `durationMs`.
+- No nested Web subagent list was added. Child runs are visible in `/api/runs` with `sub-` ids and stream at the existing `/api/runs/{id}/events`; the parent tool result carries `artifactPath`.
+- Child snapshots are persisted only when MySQL is configured; without a store they live in memory for the process lifetime.
+- `timeoutSeconds` default is 600 (min 60, max 900), matching the design.
+
 **Goal:** The parent can delegate a bounded, read-only investigation; the child has its own transcript/budget; the parent receives a compact summary.
 
 **Design.**
@@ -603,7 +611,7 @@ DelegationResult start(AgentRun parent, String task, String name, int timeoutSec
 | 2 | Parallel read-only tools | Task 1 touches `executeTools` | 1 day | Small, high latency win; avoid merge conflict by doing after Task 1 |
 | 3 | Streaming | — | 2.5 days | UX; independent of 1/2, but touches `AgentLoop` model call |
 | 4 | Session fork | — | 2 days | Delivered `5d9977e`; lineage in snapshot JSON, reused by Task 5 |
-| 5 | Subagent delegation | Tasks 1, 4 | 4 days | Biggest; needs the fork column + context safety |
+| 5 | Subagent delegation | Tasks 1, 4 | 4 days | Delivered `18bebe4`; per-run registry, read-only child, 2-per-parent cap |
 
 Total: ~11.5 engineering days, plus review. The first iteration is only Phase 1 (S1–S8, ~3 days); stop after S8 for review. Do not parallelize Tasks 1/2/3 on the same files; they all touch `AgentLoop.java`.
 
