@@ -24,7 +24,8 @@ public final class BuiltInTools {
                 new UpdatePlanTool(),
                 new LoadSkillTool(),
                 new ReflectTool(),
-                new AskUserTool()
+                new AskUserTool(),
+                new ReadToolOutputTool()
         );
     }
 
