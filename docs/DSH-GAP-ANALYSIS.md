@@ -236,7 +236,20 @@ Jade 的十阶段循环、MySQL 事件持久化、权限审批、验证门、Goa
 - Web/SSE：`J/src/main/java/io/github/jasoncai0/agent/web/WebServer.java:387-434`；`J/src/main/resources/web/app.js:713,730,808-816`
 - MCP/Skills：`J/src/main/java/io/github/jasoncai0/agent/mcp/McpConnection.java:55,77,149`；`J/src/main/java/io/github/jasoncai0/agent/skill/SkillRegistry.java:36-97`
 
-## 8. 未验证/待补证据
+## 8. 实现状态（2026-11-17 晚更新）
+
+上面的矩阵是 `5772293` 时刻的快照。P0 与流式 P1 已按配套计划落地，提交在本地 `main`（未推送）：
+
+| 能力 | 状态 | 提交 |
+|------|------|------|
+| 工具输出落盘 + `read_tool_output`（P0-1） | 已完成，第 15 个内置工具 | `5fe81df`、`7ee0a70`、`2856eba` |
+| 溢出错误码 + 压缩重试（P0-2） | 已完成，`context.overflow` / `context.compacted` 事件，`AGENT_OVERFLOW_RECOVERY=true` | `42a8755`、`90c888e`、`5a50abc` |
+| 并行只读工具（P0-3） | 已完成，`Tool.concurrencySafe()` + 有界池，写/命令仍独占 | `bb07831`、`a0214d3`、`b341ccb`、`9fc555f` |
+| 真流式输出（P1-1） | 已完成，SSE 解析 + `assistant.delta` 实时帧（不落库、不带 `id:`） | `1c49e2a`、`b4852ec`、`2d2644e` |
+
+矩阵第 6 行（真流式）与第 2 行（并行）现在描述的是历史缺口，不再是当前状态。仍然未做：会话 fork、子代理委派、MCP resources、跨平台沙箱、插件/预设体系。
+
+## 9. 未验证/待补证据
 
 - DSH 部署层 `maxSteps` 限制：源码未见，未逐 profile 验证。
 - DSH `fork` 子代理前缀继承的源码行：仅读文档/注释。

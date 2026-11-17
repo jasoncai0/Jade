@@ -367,7 +367,16 @@ After S8, report these numbers and **wait**:
 
 ---
 
-## Phase 2 preview (P1 streaming, not detailed yet)
+## Phase 2 status (P1 streaming — shipped 2026-11-17)
+
+Executed as three slices on local `main` (not pushed): `1c49e2a` (client SSE +
+`StreamListener`), `b4852ec` (`LiveDeltaBus`, log wake-ups, SSE merge), `2d2644e`
+(`app.js` live bubble + docs). Full suite 127 tests, 0 failures; verified
+end-to-end against a mock SSE upstream. Deviations from the plan below: deltas
+are throttled at 50 ms / 512 chars, `stream_options` fallback retries once with
+`include_usage=false`, and a mid-stream failure discards the partial bubble
+instead of persisting it.
+
 
 Only after Phase 1 review: 3 slices — (a) `LlmClient.stream` + `DeepSeekClient` SSE parser with a mock server; (b) `LiveDeltaBus` + `AgentLoop` delta publishing + SSE merge; (c) `app.js` live bubble + reconnect/final reconciliation. Estimated 2.5 days. Key decisions for the review: live deltas are not persisted (confirmed in Task 3), custom gateways may reject `stream_options`, and partial output is dropped on mid-stream failure.
 
