@@ -724,6 +724,25 @@ public final class AgentLoop {
         control.checkCancelled();
     }
 
+    private static final int MAX_PRELOADED_SKILL_CHARS = 4_000;
+
+    private String preloadedSkills(List<Skill> selected) {
+        if (!settings.preloadSkills()) {
+            return "(catalog-only mode; call load_skill with a name when a skill is relevant)";
+        }
+        if (selected.isEmpty()) {
+            return "(none pre-selected; use load_skill if needed)";
+        }
+        return String.join("\n\n", selected.stream().map(skill -> {
+            if (skill.body().length() <= MAX_PRELOADED_SKILL_CHARS) {
+                return skill.render();
+            }
+            return "### Skill: " + skill.name() + "\n" + skill.description()
+                    + "\n\n(full instructions are " + skill.body().length()
+                    + " chars; call load_skill to read them)";
+        }).toList());
+    }
+
     private static final class PreparedCall {
         private final ToolCall call;
         private Map<String, Object> args;
@@ -912,7 +931,7 @@ public final class AgentLoop {
                 ## Installed skill catalog
                 %s
 
-                ## Auto-selected skills (full instructions)
+                ## Auto-selected skills
                 %s
 
                 ## Ten-phase turn
@@ -922,8 +941,7 @@ public final class AgentLoop {
                 workspace.root(),
                 goalSection,
                 skills.catalog(),
-                selected.isEmpty() ? "(none pre-selected; use load_skill if needed)"
-                        : String.join("\n\n", selected.stream().map(Skill::render).toList())
+                preloadedSkills(selected)
         ));
         return out.toString();
     }

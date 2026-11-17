@@ -483,7 +483,7 @@ public final class AgentService implements AutoCloseable {
     private AgentSettings childSettings() {
         AgentSettings base = config.agent();
         return new AgentSettings(40, 8, base.contextCharBudget(), base.commandTimeoutSeconds(),
-                false, PermissionMode.READ_ONLY, 0, false, 30_000, true);
+                false, PermissionMode.READ_ONLY, 0, false, 30_000, true, false);
     }
 
     private void executeTurn(AgentRun run, RunControl control,
@@ -616,6 +616,7 @@ public final class AgentService implements AutoCloseable {
         summary.put("autoVerify", config.agent().autoVerify());
         summary.put("goalMode", config.agent().goalMode());
         summary.put("overflowRecovery", config.agent().overflowRecovery());
+        summary.put("skillPreload", config.agent().preloadSkills());
         summary.put("permissionMode", config.agent().permissionMode().id());
         summary.put("workspaceRoot", config.workspacesDir().toString());
         summary.put("skillsDir", config.skillsDir().toString());

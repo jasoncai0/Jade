@@ -55,7 +55,8 @@ public record AppConfig(
                 bool(get, "AGENT_GOAL_MODE", true),
                 integer(get, "AGENT_CONTEXT_TOKEN_BUDGET", AgentSettings.DEFAULT_CONTEXT_TOKEN_BUDGET,
                         0, 200_000),
-                bool(get, "AGENT_OVERFLOW_RECOVERY", AgentSettings.DEFAULT_OVERFLOW_RECOVERY)
+                bool(get, "AGENT_OVERFLOW_RECOVERY", AgentSettings.DEFAULT_OVERFLOW_RECOVERY),
+                bool(get, "AGENT_SKILL_PRELOAD", AgentSettings.DEFAULT_PRELOAD_SKILLS)
         );
         ServerSettings server = new ServerSettings(
                 value(get, "AGENT_HOST", "127.0.0.1"),

@@ -102,6 +102,7 @@ public final class CodingAgentApplication {
                 : config.agent().contextTokenBudget() + " tokens"));
         System.out.println("auto verify      " + config.agent().autoVerify());
         System.out.println("overflow recovery " + config.agent().overflowRecovery());
+        System.out.println("skill preload    " + config.agent().preloadSkills());
         System.out.println("sandbox          " + new CommandRunner().sandbox().description());
         boolean mysqlReady = false;
         if (config.mysql() == null) {
@@ -438,7 +439,7 @@ public final class CodingAgentApplication {
                     agent.autoVerify(),
                     options.permissionMode() == null ? agent.permissionMode() : options.permissionMode(),
                     agent.tokenBudget(), agent.goalMode(), agent.contextTokenBudget(),
-                    agent.overflowRecovery());
+                    agent.overflowRecovery(), agent.preloadSkills());
         }
         ServerSettings server = config.server();
         if (options.port() != null || options.host() != null) {
