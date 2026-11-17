@@ -589,7 +589,18 @@ public final class AgentLoop {
                 }
             }
         } finally {
-            pool.shutdownNow();
+            pool.shutdown();
+            boolean interrupted = false;
+            while (!pool.isTerminated()) {
+                try {
+                    pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
         control.checkCancelled();
     }
