@@ -111,6 +111,16 @@ are replayed into the new log with `id`, `runId` and `workspace` rewritten, then
 one `fork.created` event is appended. A fork is created idle: it accepts a
 follow-up like any terminal session, but its later turns never touch the parent.
 
+`AgentService` also owns one `SubagentService`. A parent run's registry gets a
+per-run `DelegateTaskTool`; a child run's registry is rebuilt from a read-only
+whitelist (`list_files`, `read_file`, `search_text`, `load_skill`, `reflect`).
+`SubagentService` caps two live children per parent and depth one. Each child is
+a real `AgentRun` in the same workspace with its own `RunState`, event log and
+`READ_ONLY` permission broker, so a denied write becomes a tool error rather
+than a parent failure. Child artifacts go to `.agent/subagents/<childRunId>/`
+to avoid overwriting the parent transcript; the parent receives a summary,
+child id, usage and up to 20 paths the child read.
+
 `maxToolCallsPerStep` does not drop calls. Calls beyond the limit receive a tool
 message explaining the limit, so the assistant/tool pairing stays valid.
 
@@ -150,7 +160,9 @@ There are two layers:
 
 1. **Static registration.** `BuiltInTools.all()` returns the fifteen built-ins.
    `BuiltInTools.registry()` registers each one and then calls
-   `ToolRegistry.discover(...)`.
+   `ToolRegistry.discover(...)`. `delegate_task` is not in this list: it is
+   registered per parent run because it needs the parent `AgentRun` and the
+   `SubagentService`.
 2. **ServiceLoader discovery.** `ToolRegistry.discover` loads every
    `ToolProvider` on the classpath and registers its tools. A provider is:
 

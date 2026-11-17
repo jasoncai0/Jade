@@ -57,6 +57,11 @@ public final class ToolRegistry {
         return Set.copyOf(tools.keySet());
     }
 
+    /** Snapshot of the registered tools, in registration order. */
+    public List<Tool> all() {
+        return List.copyOf(tools.values());
+    }
+
     public boolean concurrencySafe(String name) {
         return find(name).map(Tool::concurrencySafe).orElse(false);
     }

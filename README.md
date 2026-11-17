@@ -174,6 +174,15 @@ directories are not copied, and the fork starts idle until the first follow-up
 message. The console exposes this as the `Fork` button on a finished session;
 the parent link is shown in the session list.
 
+Delegation is the other way to keep a session small: the parent model can call
+`delegate_task` with a question and a time budget. The child runs the same
+ten-phase loop with `READ_ONLY` permissions, 40 steps and a 30k-token budget;
+the parent receives one tool result (status, tokens, files read, summary) and
+never the child's transcript. Child sessions appear in `/api/runs` with a
+`sub-` id, so they can be inspected or streamed independently. They are
+in-memory only when Jade runs without MySQL; with MySQL their snapshots survive
+a restart like any other run.
+
 
 ### Goal mode
 
@@ -308,6 +317,15 @@ Fifteen built-in tools are registered at startup:
 | `reflect` | Record a structured diagnosis, evidence, attempts, next action, and stop decision |
 | `ask_user` | Ask for a single/multiple choice or free-text decision and wait for the user |
 | `read_tool_output` | Read a spilled tool output by path and character window |
+
+Parent runs additionally get `delegate_task`, which is created per run rather
+than registered globally: it starts one bounded, read-only child investigation
+in the same workspace and returns only a summary plus the child run id. The
+child sees `list_files`, `read_file`, `search_text`, `load_skill` and `reflect`;
+it cannot write, run commands, compile, ask the user, or delegate again. At most
+two children run per parent, depth is one, and each child has its own transcript
+under `.agent/subagents/<childRunId>/` and its own SSE stream at
+`/api/runs/<childRunId>/events`.
 
 `ToolRegistry` also discovers external tools through `ServiceLoader`. See
 [Extending Jade](#extending-jade).

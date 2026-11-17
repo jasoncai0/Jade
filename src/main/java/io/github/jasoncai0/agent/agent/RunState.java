@@ -31,6 +31,8 @@ public final class RunState {
     private volatile QuestionRequest pendingQuestion;
     private volatile String parentRunId;
     private volatile Long forkSeq;
+    private volatile boolean subagent;
+    private volatile Usage subagentUsage = Usage.ZERO;
 
     public RunState(String id, String task, String workspace, int maxSteps) {
         this(id, task, workspace, maxSteps, System.currentTimeMillis());
@@ -210,6 +212,24 @@ public final class RunState {
 
     public synchronized void addUsage(Usage delta) {
         usage = usage.plus(delta);
+    }
+
+    /** Child work billed separately so the parent can show delegation cost. */
+    public synchronized void addSubagentUsage(Usage delta) {
+        subagentUsage = subagentUsage.plus(delta);
+    }
+
+    public Usage subagentUsage() {
+        return subagentUsage;
+    }
+
+    void markSubagent(String parentId) {
+        this.subagent = true;
+        this.parentRunId = parentId;
+    }
+
+    public boolean isSubagent() {
+        return subagent;
     }
 
     public synchronized void setVerification(String summary) {

@@ -1,6 +1,7 @@
 package io.github.jasoncai0.agent.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.jasoncai0.agent.config.AgentSettings;
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
 import io.github.jasoncai0.agent.history.EventStore;
@@ -12,11 +13,15 @@ import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.mcp.McpManager;
 import io.github.jasoncai0.agent.skill.Skill;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
+import io.github.jasoncai0.agent.tool.Tool;
 import io.github.jasoncai0.agent.tool.ToolRegistry;
 import io.github.jasoncai0.agent.tool.builtin.BuiltInTools;
+import io.github.jasoncai0.agent.tool.builtin.DelegateTaskTool;
 import io.github.jasoncai0.agent.permission.PermissionDecision;
+import io.github.jasoncai0.agent.permission.PermissionMode;
 import io.github.jasoncai0.agent.permission.PermissionRequest;
 import io.github.jasoncai0.agent.permission.PermissionResult;
+import io.github.jasoncai0.agent.permission.PermissionSession;
 import io.github.jasoncai0.agent.permission.PermissionScope;
 import io.github.jasoncai0.agent.question.QuestionAnswer;
 import io.github.jasoncai0.agent.question.QuestionBroker;
@@ -72,6 +77,7 @@ public final class AgentService implements AutoCloseable {
     private final Set<Path> activeWorkspaces = ConcurrentHashMap.newKeySet();
     private final Object startLock = new Object();
     private volatile boolean closed;
+    private volatile SubagentService subagents;
 
     public AgentService(AppConfig config) {
         this(config, new DeepSeekClient(config.llm()), createStore(config));
@@ -385,6 +391,101 @@ public final class AgentService implements AutoCloseable {
         return value;
     }
 
+    private SubagentService subagents() {
+        SubagentService current = subagents;
+        if (current != null) {
+            return current;
+        }
+        synchronized (this) {
+            if (subagents == null) {
+                subagents = new SubagentService(this);
+            }
+            return subagents;
+        }
+    }
+
+    /**
+     * Parent runs get a per-run registry with {@code delegate_task}; child runs
+     * never do, and their registry is also a separate read-only whitelist.
+     */
+    private ToolRegistry toolsForRun(AgentRun run) {
+        if (run.state().isSubagent()) {
+            return subagentTools();
+        }
+        ToolRegistry registry = new ToolRegistry().registerAll(tools.all());
+        registry.register(new DelegateTaskTool(subagents(), run));
+        return registry;
+    }
+
+    private static ToolRegistry subagentTools() {
+        ToolRegistry registry = new ToolRegistry();
+        for (Tool tool : BuiltInTools.all()) {
+            if (SubagentService.readOnlyToolNames().contains(tool.spec().name())) {
+                registry.register(tool);
+            }
+        }
+        return registry;
+    }
+
+    AgentRun newChildRun(AgentRun parent, String name, String task) {
+        String id = "sub-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        Workspace workspace = Workspace.open(parent.workspace().root());
+        RunState state = new RunState(id, task, parent.state().workspace(), 40);
+        state.markSubagent(parent.id());
+        RunEventLog events = new RunEventLog(id, eventStore);
+        AgentRun child = new AgentRun(id, workspace, state, events);
+        runs.put(id, child);
+        Log.info("subagent.created", Map.of(
+                "parentRunId", parent.id(),
+                "childRunId", id,
+                "name", name == null || name.isBlank() ? "subagent" : name));
+        return child;
+    }
+
+    void runChild(AgentRun child, String task, RunControl control,
+                  CompletableFuture<RunSnapshot> completion) {
+        if (!child.beginTurn(control, completion)) {
+            completion.completeExceptionally(new IllegalStateException("Child already running"));
+            return;
+        }
+        control.attach(Thread.currentThread());
+        try {
+            AgentLoop loop = new AgentLoop(
+                    llm, subagentTools(), skills, childSettings(), config.llm().maxOutputTokens(),
+                    new Verifier(), new PermissionBroker(), new PermissionSession(),
+                    new QuestionBroker(), GoalReviewer.NOOP)
+                    .withLiveDeltas(child.deltas());
+            loop.run(task, child.workspace(), child.state(), child.events(), control);
+            completion.complete(child.state().snapshot());
+        } catch (Throwable t) {
+            if (!child.state().snapshot().terminal()) {
+                if (t instanceof RunControl.RunCancelledException || control.isCancelled()) {
+                    child.state().cancel();
+                } else {
+                    child.state().fail(t.getMessage() == null
+                            ? t.getClass().getSimpleName() : t.getMessage());
+                }
+            }
+            completion.completeExceptionally(t);
+        } finally {
+            if (eventStore != null) {
+                try {
+                    eventStore.saveSnapshot(child.state().snapshot());
+                } catch (RuntimeException e) {
+                    Log.error("agent.snapshot.persist_failed", e, Map.of("runId", child.id()));
+                }
+            }
+            child.events().close();
+            child.finishTurn();
+        }
+    }
+
+    private AgentSettings childSettings() {
+        AgentSettings base = config.agent();
+        return new AgentSettings(40, 8, base.contextCharBudget(), base.commandTimeoutSeconds(),
+                false, PermissionMode.READ_ONLY, 0, false, 30_000, true);
+    }
+
     private void executeTurn(AgentRun run, RunControl control,
                              CompletableFuture<RunSnapshot> completion,
                              String userMessage, boolean continuation) {
@@ -394,7 +495,7 @@ public final class AgentService implements AutoCloseable {
         control.attach(Thread.currentThread());
         try {
             AgentLoop loop = new AgentLoop(
-                    llm, tools, skills, config.agent(), config.llm().maxOutputTokens(),
+                    llm, toolsForRun(run), skills, config.agent(), config.llm().maxOutputTokens(),
                     new Verifier(), run.permissions(), run.permissionSession(), run.questions())
                     .withLiveDeltas(run.deltas());
             RunSnapshot snapshot = continuation
@@ -443,6 +544,10 @@ public final class AgentService implements AutoCloseable {
 
     public RunSnapshot cancel(String id) {
         AgentRun run = require(id);
+        SubagentService children = subagents;
+        if (children != null) {
+            children.cancelChildren(id);
+        }
         run.permissions().cancelAll("run cancelled");
         run.questions().cancelAll("run cancelled");
         run.control().cancel();
@@ -727,6 +832,10 @@ public final class AgentService implements AutoCloseable {
             return;
         }
         closed = true;
+        SubagentService children = subagents;
+        if (children != null) {
+            children.close();
+        }
         runs.values().forEach(run -> run.control().cancel());
         executor.shutdownNow();
         try {

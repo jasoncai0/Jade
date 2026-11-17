@@ -447,7 +447,7 @@ public final class AgentLoop {
                 }
 
                 context.refreshFiles();
-                String transcript = RunArtifacts.persist(workspace, state.snapshot(), messages, log);
+                String transcript = persistArtifacts(workspace, state, messages, log);
                 state.setTranscriptPath(transcript);
                 phase(state, log, AgentPhase.CHECKPOINT, cycle,
                         state.files().size() + " workspace entries; transcript " + (transcript == null ? "unavailable" : transcript));
@@ -522,7 +522,7 @@ public final class AgentLoop {
         } finally {
             try {
                 context.refreshFiles();
-                String transcript = RunArtifacts.persist(workspace, state.snapshot(), messages, log);
+                String transcript = persistArtifacts(workspace, state, messages, log);
                 state.setTranscriptPath(transcript);
             } catch (RuntimeException e) {
                 Log.warn("agent.artifacts.failed", Map.of("runId", state.id(), "error", String.valueOf(e.getMessage())));
@@ -532,7 +532,7 @@ public final class AgentLoop {
             try {
                 // Persist once more so a restarted process can replay the final
                 // run.finished event, not just the earlier checkpoint.
-                RunArtifacts.persist(workspace, snapshot, messages, log);
+                persistArtifacts(workspace, state, messages, log);
             } catch (RuntimeException e) {
                 Log.warn("agent.artifacts.final_failed", Map.of(
                         "runId", state.id(), "error", String.valueOf(e.getMessage())));
@@ -979,4 +979,11 @@ public final class AgentLoop {
         }
         return map;
     }
+    /** Child runs keep their transcript in a subdirectory of the shared workspace. */
+    private static String persistArtifacts(Workspace workspace, RunState state,
+                                           java.util.List<ChatMessage> messages, RunEventLog log) {
+        String dir = state.isSubagent() ? ".agent/subagents/" + state.id() : ".agent";
+        return RunArtifacts.persist(workspace, state.snapshot(), messages, log, dir);
+    }
+
 }

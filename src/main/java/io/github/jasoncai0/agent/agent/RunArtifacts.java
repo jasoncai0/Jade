@@ -58,8 +58,19 @@ public final class RunArtifacts {
 
     public static String persist(Workspace workspace, RunSnapshot snapshot,
                                  List<ChatMessage> messages, RunEventLog events) {
+        return persist(workspace, snapshot, messages, events, ".agent");
+    }
+
+    /**
+     * Persists under an explicit artifact directory. Subagent runs use
+     * {@code .agent/subagents/<id>} so a child never overwrites the parent's
+     * transcript or event stream in a shared workspace.
+     */
+    public static String persist(Workspace workspace, RunSnapshot snapshot,
+                                 List<ChatMessage> messages, RunEventLog events,
+                                 String agentDir) {
         try {
-            Path dir = workspace.root().resolve(".agent");
+            Path dir = workspace.root().resolve(agentDir);
             Files.createDirectories(dir);
             ObjectNode root = JSON.createObjectNode();
             root.put("id", snapshot.id());
@@ -116,7 +127,7 @@ public final class RunArtifacts {
             if (snapshot.finalAnswer() != null && !snapshot.finalAnswer().isBlank()) {
                 Files.writeString(dir.resolve("final.md"), snapshot.finalAnswer(), StandardCharsets.UTF_8);
             }
-            return TRANSCRIPT;
+            return agentDir + "/transcript.json";
         } catch (IOException e) {
             return null;
         }
@@ -163,8 +174,17 @@ public final class RunArtifacts {
      * Reads the persisted conversation so a follow-up turn can continue with
      * the same history instead of starting from a synthetic task message.
      */
+    /** Reads a child transcript written under {@code .agent/subagents/<id>}. */
+    public static List<ChatMessage> loadMessages(Path workspaceRoot, String childRunId) {
+        return loadFrom(workspaceRoot.resolve(".agent/subagents").resolve(childRunId)
+                .resolve("transcript.json"));
+    }
+
     public static List<ChatMessage> loadMessages(Path workspaceRoot) {
-        Path transcript = workspaceRoot.resolve(TRANSCRIPT);
+        return loadFrom(workspaceRoot.resolve(TRANSCRIPT));
+    }
+
+    private static List<ChatMessage> loadFrom(Path transcript) {
         if (!Files.isRegularFile(transcript)) {
             return List.of();
         }
