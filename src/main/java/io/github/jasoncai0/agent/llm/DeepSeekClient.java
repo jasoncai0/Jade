@@ -26,6 +26,7 @@ import java.util.concurrent.ThreadLocalRandom;
 public final class DeepSeekClient implements LlmClient {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final int MAX_ATTEMPTS = 3;
+    private static final int ERROR_BODY_LIMIT = 8_192;
 
     private final LlmSettings settings;
     private final HttpClient http;
@@ -93,7 +94,8 @@ public final class DeepSeekClient implements LlmClient {
                 }
 
                 String message = extractErrorMessage(response.body(), status);
-                lastFailure = new LlmException(message, status, null);
+                String code = extractErrorCode(response.body());
+                lastFailure = new LlmException(message, status, code, null);
                 boolean retryable = status == 429 || status >= 500;
                 if (!retryable || attempt == MAX_ATTEMPTS) {
                     throw lastFailure;
@@ -236,21 +238,48 @@ public final class DeepSeekClient implements LlmClient {
         }
     }
 
+    private static String extractErrorCode(String body) {
+        String limited = limitBody(body);
+        if (limited.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode error = JSON.readTree(limited).path("error");
+            for (String field : List.of("code", "type")) {
+                JsonNode value = error.path(field);
+                if (value.isTextual() && !value.asText().isBlank()) {
+                    return value.asText();
+                }
+            }
+        } catch (IOException ignored) {
+            // Plain-text error body: no machine-readable code.
+        }
+        return null;
+    }
+
     private static String extractErrorMessage(String body, int status) {
         String message = "DeepSeek API returned HTTP " + status;
+        String limited = limitBody(body);
         try {
-            JsonNode root = JSON.readTree(body);
+            JsonNode root = JSON.readTree(limited);
             JsonNode apiMessage = root.path("error").path("message");
             if (apiMessage.isTextual() && !apiMessage.asText().isBlank()) {
                 message += ": " + apiMessage.asText();
             }
         } catch (IOException ignored) {
-            String trimmed = body == null ? "" : body.strip();
+            String trimmed = limited.strip();
             if (!trimmed.isBlank()) {
                 message += ": " + truncate(trimmed, 300);
             }
         }
         return message;
+    }
+
+    private static String limitBody(String body) {
+        if (body == null) {
+            return "";
+        }
+        return body.length() <= ERROR_BODY_LIMIT ? body : body.substring(0, ERROR_BODY_LIMIT);
     }
 
     private long retryDelayMs(int attempt, String retryAfter) {
