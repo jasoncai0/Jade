@@ -20,6 +20,7 @@ import io.github.jasoncai0.agent.tool.ToolContext;
 import io.github.jasoncai0.agent.tool.ToolRegistry;
 import io.github.jasoncai0.agent.tool.ToolResult;
 import io.github.jasoncai0.agent.workspace.Workspace;
+import io.github.jasoncai0.agent.workspace.WorkspaceException;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -139,6 +140,7 @@ public final class AgentLoop {
                                 boolean continuation) {
         ToolContext context = new ToolContext(workspace, settings, skills, state, verifier,
                 state.id(), log, questionBroker, control);
+        ToolOutputStore spill = new ToolOutputStore(workspace.root());
         context.refreshFiles();
         PermissionManager permissions = new PermissionManager(settings.permissionMode(), permissionSession,
                 permissionBroker, state, log, control, workspace);
@@ -246,7 +248,7 @@ public final class AgentLoop {
                         break;
                     }
                     totalToolCalls += result.toolCalls().size();
-                    executeTools(result.toolCalls(), messages, context, state, log, control, stats, permissions);
+                    executeTools(result.toolCalls(), messages, context, state, log, control, stats, permissions, spill);
                     boolean madeProgress = !state.files().equals(filesBefore)
                             || (!verifiedBefore && context.verified());
                     if (madeProgress) {
@@ -457,7 +459,8 @@ public final class AgentLoop {
 
     private void executeTools(List<ToolCall> calls, List<ChatMessage> messages,
                               ToolContext context, RunState state, RunEventLog log,
-                              RunControl control, int[] stats, PermissionManager permissions) {
+                              RunControl control, int[] stats, PermissionManager permissions,
+                              ToolOutputStore spill) {
         int limit = Math.min(calls.size(), settings.maxToolCallsPerStep());
         for (int i = 0; i < calls.size(); i++) {
             control.checkCancelled();
@@ -505,7 +508,14 @@ public final class AgentLoop {
                 context.setNetworkAllowed(false);
             }
             long duration = System.currentTimeMillis() - started;
-            String output = truncate(result.output(), MAX_TOOL_OUTPUT_CHARS);
+            String output;
+            try {
+                ToolOutputRef ref = spill.save(state.id(), log.lastSeq(), call.name(), result.output());
+                output = spill.inline(result.output(), ref);
+            } catch (WorkspaceException e) {
+                output = truncate(result.output(), MAX_TOOL_OUTPUT_CHARS)
+                        + "\n[spill failed: " + e.getMessage() + "]";
+            }
             messages.add(ChatMessage.tool(call.id(),
                     (result.ok() ? "OK " : "ERROR ") + call.name() + "\n" + output));
             if (result.ok()) {
