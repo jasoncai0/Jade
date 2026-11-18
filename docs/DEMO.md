@@ -66,16 +66,17 @@ correct.
 
 Press `Start agent`. Watch:
 
-1. The plan appears in the right rail.
-2. The phase rail lights through Intake → Checkpoint for each model turn.
-3. The tool card shows `write_file` arguments and the real write result.
+1. The plan appears in the Context drawer (top-right `Context`).
+2. The compact phase strip lights through Intake → Checkpoint for each model turn.
+3. Switch to the `Trace` tab to see the tool cards; `write_file` shows its arguments and real write result.
 4. A second tool card shows `compile_code` / `run_code` output.
-5. The verification panel turns green with the exact `python3 -m py_compile` or `go build`
+5. The verification panel in Context turns green with the exact `python3 -m py_compile` or `go build`
    command (or `node --check` / `javac` for the other examples).
-6. The run ends `SUCCEEDED`; the workspace panel lists `main.go`.
+6. The run ends `SUCCEEDED`; the Context workspace panel lists `main.go`.
 7. Type a follow-up in the same composer, for example `Change the output to
-   hello-v2, rebuild and run it again.` Click `Send follow-up`. A `you` trace
-   appears, the plan resets for the new turn, and telemetry accumulates across
+   hello-v2, rebuild and run it again.` Click `Send follow-up`. The view returns
+   to `Session`, a `you` trace appears, the plan resets for the new turn, and
+   telemetry accumulates across
    the session.
 8. Stop the process, run `./run.sh` again, and reload the page. The left rail
    still lists the session; select it and the plan, trace, files, and final

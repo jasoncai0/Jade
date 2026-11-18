@@ -14,7 +14,7 @@
     <span class="brand-mark">J<span class="brand-dot"></span></span>
     <span class="brand-copy">
       <strong>JADE</strong>
-      <small>Java · Python · JavaScript · Go</small>
+      <small>local coding agent</small>
     </span>
   </a>
 
@@ -27,7 +27,7 @@
     <button class="ghost" id="howBtn" type="button">How it works</button>
     <button class="ghost" id="skillsBtn" type="button">Skills</button>
     <button class="ghost" id="toolsBtn" type="button">Tools</button>
-    <button class="accent-ghost" id="newRunBtn" type="button">New run</button>
+    <button class="ghost" id="contextBtn" type="button" aria-controls="contextDrawer" aria-expanded="false">Context</button>
   </nav>
 </header>
 
@@ -37,95 +37,82 @@
 </div>
 
 <div class="app-shell">
-  <aside class="left-rail">
-    <section class="card composer-card">
-      <div class="eyebrow"><span class="eyebrow-line"></span>New run</div>
-      <h1>What should it build?</h1>
-      <label class="sr-only" for="taskInput">Task for the coding agent</label>
-      <textarea id="taskInput" maxlength="20000" spellcheck="false"
-        placeholder="Create a Python CLI that prints the first 15 primes, then syntax-check and run it to prove it works."></textarea>
-      <div class="composer-meta">
-        <span id="charCount">0 / 20k</span>
-        <span><kbd>⌘</kbd><kbd>↵</kbd> to run</span>
-      </div>
-      <button class="primary" id="startBtn" type="button">
-        <span>Start agent</span>
-        <span class="primary-arrow" aria-hidden="true">→</span>
+  <aside class="left-rail" aria-label="Sessions">
+    <div class="sidebar-head">
+      <button class="new-task" id="newRunBtn" type="button">
+        <span class="new-task-plus" aria-hidden="true">+</span>
+        <span>New task</span>
+        <kbd>⌘ N</kbd>
       </button>
-      <p class="warning hidden" id="keyWarning">
-        No <code>DEEPSEEK_API_KEY</code> found. Copy <code>.env.example</code> to <code>.env</code>, set the key, then restart.
-      </p>
-    </section>
-
-    <section class="examples-block" aria-label="Example tasks">
-      <div class="eyebrow"><span class="eyebrow-line"></span>Try a task</div>
-      <button class="example" type="button" data-task="Create a Python CLI at main.py that prints the first 15 prime numbers, one per line. Syntax-check it with compile_code and run it to prove the output is correct.">
-        <span class="example-index">01</span>
-        <span><strong>Python CLI</strong><small>py_compile + execute</small></span>
-      </button>
-      <button class="example" type="button" data-task="Build a Node.js program at main.js that prints 1 to 30 using Fizz, Buzz, and FizzBuzz rules. Syntax-check it with node --check and run it.">
-        <span class="example-index">02</span>
-        <span><strong>JS FizzBuzz</strong><small>node --check + execute</small></span>
-      </button>
-      <button class="example" type="button" data-task="Create a small Java assertion runner with a main method that exits with code 1 when an assertion fails. Compile it with javac and run it.">
-        <span class="example-index">03</span>
-        <span><strong>Java assertions</strong><small>javac + real exit code</small></span>
-      </button>
-      <button class="example" type="button" data-task="Create a Go program at main.go that quicksorts a small integer slice and prints the sorted result. Build it with go build and run it with go run.">
-        <span class="example-index">04</span>
-        <span><strong>Go quicksort</strong><small>go build + go run</small></span>
-      </button>
-    </section>
+    </div>
 
     <section class="runs-block">
       <div class="section-head">
-        <div class="eyebrow"><span class="eyebrow-line"></span>Sessions</div>
+        <span class="section-label">Sessions</span>
         <span class="count" id="runCount">0</span>
       </div>
       <div id="runList" class="run-list">
         <p class="empty-note">No saved sessions yet. Start one above; it will survive a restart.</p>
       </div>
-      <p class="retention-note">Saved to disk · last 200 sessions</p>
+      <p class="retention-note">Saved locally · last 200 sessions</p>
     </section>
 
     <footer class="rail-footer">
-      <span>Jade 1.0.0</span>
-      <span>Local · DeepSeek tool calling</span>
+      <span>Jade 1.4.0</span>
+      <span>localhost · DeepSeek</span>
     </footer>
   </aside>
 
   <main class="stage">
     <section id="emptyState" class="empty-state">
-      <div class="empty-visual" aria-hidden="true">
-        <span class="empty-code">&lt;/&gt;</span>
-        <span class="empty-orbit orbit-one"></span>
-        <span class="empty-orbit orbit-two"></span>
+      <div class="empty-inner">
+        <div class="empty-kicker">Local agent runtime</div>
+        <h1>What should Jade build?</h1>
+        <p class="empty-lede">
+          A ten-phase coding loop with real tools, real files, and a verification gate.
+          Nothing is reported as working until <code>javac</code>, <code>python3</code>,
+          <code>node</code>, or <code>go</code> says so.
+        </p>
+
+        <div class="example-grid" aria-label="Example tasks">
+          <button class="example" type="button" data-task="Create a Python CLI at main.py that prints the first 15 prime numbers, one per line. Syntax-check it with compile_code and run it to prove the output is correct.">
+            <span class="example-index">python</span>
+            <span><strong>Prime CLI</strong><small>Write, check, execute</small></span>
+          </button>
+          <button class="example" type="button" data-task="Build a Node.js program at main.js that prints 1 to 30 using Fizz, Buzz, and FizzBuzz rules. Syntax-check it with node --check and run it.">
+            <span class="example-index">node</span>
+            <span><strong>FizzBuzz</strong><small>A tiny runnable artifact</small></span>
+          </button>
+          <button class="example" type="button" data-task="Create a small Java assertion runner with a main method that exits with code 1 when an assertion fails. Compile it with javac and run it.">
+            <span class="example-index">java</span>
+            <span><strong>Assertion runner</strong><small>Compile, test, run</small></span>
+          </button>
+          <button class="example" type="button" data-task="Create a Go program at main.go that quicksorts a small integer slice and prints the sorted result. Build it with go build and run it with go run.">
+            <span class="example-index">go</span>
+            <span><strong>Quicksort</strong><small>Build, run, prove output</small></span>
+          </button>
+        </div>
+
+        <div class="loop-strip" aria-label="Ten-phase loop">
+          <span>Intake</span><i></i><span>Context</span><i></i><span>Skills</span><i></i><span>Plan</span><i></i>
+          <span>Model</span><i></i><span>Tools</span><i></i><span>Observe</span><i></i><span>Verify</span><i></i>
+          <span>Compact</span><i></i><span>Checkpoint</span>
+        </div>
+
+        <div class="empty-facts">
+          <div><strong id="emptyTools">15</strong><span>tools</span></div>
+          <div><strong id="emptySkills">6</strong><span>skills</span></div>
+          <div><strong>10</strong><span>phases per turn</span></div>
+          <div><strong>1</strong><span>isolated workspace</span></div>
+        </div>
       </div>
-      <div class="eyebrow"><span class="eyebrow-line"></span>Local agent runtime</div>
-      <h2>Plan. Edit. Compile. Run.</h2>
-      <p class="empty-lede">
-        A ten-phase coding loop with real tools, real files, and a verification gate.
-        Nothing is reported as working until <code>javac</code>, <code>python3</code>, <code>node</code>, or <code>go</code> says so.
-      </p>
-      <div class="loop-strip" aria-label="Ten-phase loop">
-        <span>Intake</span><i></i><span>Context</span><i></i><span>Skills</span><i></i><span>Plan</span><i></i>
-        <span>Model</span><i></i><span>Tools</span><i></i><span>Observe</span><i></i><span>Verify</span><i></i>
-        <span>Compact</span><i></i><span>Checkpoint</span>
-      </div>
-      <div class="empty-facts">
-        <div><strong id="emptyTools">14</strong><span>built-in tools</span></div>
-        <div><strong id="emptySkills">6</strong><span>discovered skills</span></div>
-        <div><strong>10</strong><span>phases per turn</span></div>
-        <div><strong>1</strong><span>isolated workspace</span></div>
-      </div>
-      <p class="empty-hint">Pick an example on the left, or write your own task. <kbd>⌘</kbd><kbd>↵</kbd></p>
     </section>
 
     <section id="runView" class="run-view hidden">
       <header class="run-header">
         <div class="run-heading">
-          <div class="eyebrow"><span class="eyebrow-line live"></span>Live run <span class="run-id" id="runId"></span></div>
-          <h2 id="runTask">Untitled task</h2>
+          <div class="run-kicker"><span class="live-mark"></span> Live run <span class="run-id" id="runId"></span></div>
+          <h1 id="runTask">Untitled task</h1>
         </div>
         <div class="run-header-actions">
           <span class="status-badge" id="runStatus"><span class="status-dot"></span><span id="runStatusText">queued</span></span>
@@ -133,6 +120,7 @@
           <button class="ghost danger-ghost" id="cancelBtn" type="button">Cancel</button>
         </div>
       </header>
+
       <div class="run-meta">
         <span class="meta-item"><span class="meta-label">workspace</span><code id="runWorkspace">—</code></span>
         <span class="meta-item"><span class="meta-label">turn</span><span id="runTurn">0 / ∞</span></span>
@@ -140,37 +128,27 @@
         <span class="meta-item"><span class="meta-label">stream</span><span id="streamState" class="stream-state">connecting</span></span>
       </div>
 
-      <section class="card phase-card">
-        <div class="card-head">
-          <div>
-            <div class="eyebrow"><span class="eyebrow-line"></span>Ten-phase loop</div>
-            <p class="card-sub">Every model turn runs the whole pipeline. Turns are unbounded by default; repeated calls act as a guardrail, and an optional token budget can cap unattended runs.</p>
+      <div class="view-tabs" role="tablist" aria-label="Run views">
+        <button class="view-tab active" id="sessionTab" type="button" role="tab" aria-selected="true" aria-controls="timeline">Session</button>
+        <button class="view-tab" id="traceTab" type="button" role="tab" aria-selected="false" aria-controls="timeline">Trace <span class="tab-count" id="traceCount">0</span></button>
+        <div class="tab-spacer"></div>
+        <div class="trace-actions">
+          <div class="trace-order" role="group" aria-label="Trace order">
+            <button class="trace-order-button active" id="traceOrderAsc" type="button" aria-pressed="true" title="Oldest event first">Oldest</button>
+            <button class="trace-order-button" id="traceOrderDesc" type="button" aria-pressed="false" title="Newest event first">Newest</button>
           </div>
-          <div class="turn-readout" id="turnReadout">Turn 0 / ∞</div>
+        </div>
+      </div>
+
+      <section class="phase-card" id="phaseCard" aria-label="Ten-phase loop">
+        <div class="phase-top">
+          <span class="phase-label" id="phaseDetail"><span class="phase-detail-label">waiting</span><span id="phaseDetailText">The agent has not started yet.</span></span>
+          <span class="turn-readout" id="turnReadout">Turn 0 / ∞</span>
         </div>
         <div class="phase-grid" id="phaseGrid"></div>
-        <div class="phase-detail" id="phaseDetail">
-          <span class="phase-detail-label">waiting</span>
-          <span id="phaseDetailText">The agent has not started yet.</span>
-        </div>
       </section>
 
-      <section class="card timeline-card">
-        <div class="card-head">
-          <div>
-            <div class="eyebrow"><span class="eyebrow-line"></span>Live trace</div>
-            <p class="card-sub">Model decisions, tool calls, compilation output, and the verification gate.</p>
-          </div>
-          <div class="trace-actions">
-            <div class="trace-order" role="group" aria-label="Trace order">
-              <button class="trace-order-button active" id="traceOrderAsc" type="button"
-                      aria-pressed="true" title="Oldest event first">Oldest</button>
-              <button class="trace-order-button" id="traceOrderDesc" type="button"
-                      aria-pressed="false" title="Newest event first">Newest</button>
-            </div>
-            <span class="trace-count" id="traceCount">0 events</span>
-          </div>
-        </div>
+      <section class="timeline-card">
         <div class="history-bar" id="historyBar" hidden>
           <button class="ghost small" id="loadEarlierBtn" type="button">Load earlier events</button>
           <span class="history-count" id="historyCount"></span>
@@ -183,12 +161,36 @@
         </div>
       </section>
     </section>
+
+    <section class="composer-dock" aria-label="Task composer">
+      <div class="composer-shell">
+        <label class="sr-only" for="taskInput">Task for the coding agent</label>
+        <textarea id="taskInput" maxlength="20000" rows="2" spellcheck="false"
+          placeholder="Describe a task, or ask a follow-up…"></textarea>
+        <div class="composer-meta">
+          <span class="composer-hint"><kbd>⌘</kbd><kbd>↵</kbd> to send</span>
+          <span id="charCount">0 / 20k</span>
+        </div>
+        <button class="primary" id="startBtn" type="button">
+          <span>Start agent</span>
+          <span class="primary-arrow" aria-hidden="true">→</span>
+        </button>
+        <p class="warning hidden" id="keyWarning">
+          No <code>DEEPSEEK_API_KEY</code> found. Copy <code>.env.example</code> to <code>.env</code>, set the key, then restart.
+        </p>
+      </div>
+    </section>
   </main>
 
-  <aside class="inspector">
+  <aside class="inspector" id="contextDrawer" aria-label="Run context">
+    <div class="drawer-head">
+      <span>Run context</span>
+      <button class="icon-button" id="contextClose" type="button" aria-label="Close context">×</button>
+    </div>
+
     <section class="card plan-card">
       <div class="card-head compact">
-        <div class="eyebrow"><span class="eyebrow-line"></span>Plan</div>
+        <span class="section-label">Plan</span>
         <span class="count" id="planCount">0</span>
       </div>
       <ol class="plan-list" id="planList">
@@ -198,7 +200,7 @@
 
     <section class="card files-card">
       <div class="card-head compact">
-        <div class="eyebrow"><span class="eyebrow-line"></span>Workspace</div>
+        <span class="section-label">Workspace</span>
         <span class="count" id="fileCount">0</span>
       </div>
       <div class="file-list" id="fileList">
@@ -208,13 +210,13 @@
 
     <section class="card stats-card">
       <div class="card-head compact">
-        <div class="eyebrow"><span class="eyebrow-line"></span>Telemetry</div>
+        <span class="section-label">Telemetry</span>
         <span class="live-dot" id="telemetryLive"></span>
       </div>
       <dl class="stat-grid">
         <div><dt>prompt</dt><dd id="statPrompt">0</dd></div>
         <div><dt>completion</dt><dd id="statCompletion">0</dd></div>
-        <div><dt>total tok</dt><dd id="statTotal">0</dd></div>
+        <div><dt>total</dt><dd id="statTotal">0</dd></div>
         <div><dt>turns</dt><dd id="statTurns">0</dd></div>
       </dl>
       <div class="verify-panel" id="verifyPanel">
@@ -228,7 +230,7 @@
     </section>
 
     <section class="card runtime-card">
-      <div class="eyebrow"><span class="eyebrow-line"></span>Runtime</div>
+      <div class="section-label">Runtime</div>
       <div class="runtime-row"><span>Languages</span><span>Java · Python · JS · Go</span></div>
       <div class="runtime-row"><span>Discovery</span><span>ServiceLoader</span></div>
       <div class="runtime-row"><span>Skills</span><span>SKILL.md</span></div>
@@ -240,11 +242,13 @@
   </aside>
 </div>
 
+<div class="drawer-backdrop hidden" id="contextBackdrop"></div>
+
 <div class="modal-backdrop hidden" id="modalBackdrop">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" id="modal">
     <header class="modal-head">
       <div>
-        <div class="eyebrow"><span class="eyebrow-line"></span>Agent resources</div>
+        <div class="eyebrow">Agent resources</div>
         <h3 id="modalTitle">Resources</h3>
       </div>
       <button class="icon-button" id="modalClose" type="button" aria-label="Close dialog">×</button>

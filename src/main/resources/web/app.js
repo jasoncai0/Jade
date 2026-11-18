@@ -73,6 +73,7 @@ const state = {
   pendingPermission: null,
   pendingQuestion: null,
   traceOrder: 'asc',
+  view: 'session',
   oldestSeq: 0,
   hasEarlier: false,
   eventTotal: 0,
@@ -266,6 +267,7 @@ function showEmpty() {
   state.verification = null;
   state.currentStep = 0;
   state.usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  setView('session');
   clearTimeline();
   state.loadedEvents = 0;
   state.hasEarlier = false;
@@ -332,6 +334,7 @@ async function selectRun(id) {
   state.verification = null;
   state.pendingPermission = null;
   hidePermissionCard();
+  setView('session');
   clearTimeline();
   renderPlan([]);
   renderFiles([]);
@@ -471,6 +474,7 @@ function applySnapshot(snapshot, initial = false) {
   state.terminal = isTerminal(status);
 
   $('runTask').textContent = snapshot.task || '(untitled task)';
+  $('runTask').title = snapshot.task || '';
   $('runId').textContent = snapshot.id || '';
   $('runWorkspace').textContent = snapshot.workspace || '—';
   $('runTurn').textContent = `${snapshot.step || 0} / ${maxLabel()}`;
@@ -971,6 +975,7 @@ function beginFollowUpTurn(data, timestamp) {
   addUserMessage(data.message || 'Follow-up', timestamp);
   renderPhases();
   renderPhaseDetail();
+  setView('session');
   if (!state.startedAt) state.startedAt = timestamp || Date.now();
   startTimer();
 }
@@ -1228,7 +1233,7 @@ function clearTimeline() {
   empty.id = 'timelineEmpty';
   empty.append(el('span', 'scanner'), document.createTextNode('Waiting for the first event…'));
   timeline.appendChild(empty);
-  $('traceCount').textContent = '0 events';
+  $('traceCount').textContent = '0';
 }
 
 function ensureTimelineReady() {
@@ -1260,9 +1265,33 @@ function traceEntry(kind, timestamp) {
     timeline.appendChild(entry);
   }
   state.timelineCount += 1;
-  $('traceCount').textContent = `${state.timelineCount} ${state.timelineCount === 1 ? 'event' : 'events'}`;
+  $('traceCount').textContent = String(state.timelineCount);
   if (stick) timeline.scrollTop = state.traceOrder === 'desc' ? 0 : timeline.scrollHeight;
   return { entry, top };
+}
+
+function setView(view = 'session') {
+  const next = view === 'trace' ? 'trace' : 'session';
+  state.view = next;
+  document.body.classList.toggle('trace-mode', next === 'trace');
+  const sessionTab = $('sessionTab');
+  const traceTab = $('traceTab');
+  if (sessionTab && traceTab) {
+    sessionTab.classList.toggle('active', next === 'session');
+    traceTab.classList.toggle('active', next === 'trace');
+    sessionTab.setAttribute('aria-selected', String(next === 'session'));
+    traceTab.setAttribute('aria-selected', String(next === 'trace'));
+  }
+  if (next === 'trace') scrollTimeline(true);
+}
+
+function setContextOpen(open) {
+  const isOpen = Boolean(open);
+  document.body.classList.toggle('context-open', isOpen);
+  const backdrop = $('contextBackdrop');
+  if (backdrop) backdrop.classList.toggle('hidden', !isOpen);
+  const button = $('contextBtn');
+  if (button) button.setAttribute('aria-expanded', String(isOpen));
 }
 
 function setTraceOrder(order) {
@@ -1898,6 +1927,11 @@ function wireEvents() {
   $('cancelBtn').addEventListener('click', cancelRun);
   $('forkBtn').addEventListener('click', forkRun);
   $('newRunBtn').addEventListener('click', newRun);
+  $('sessionTab').addEventListener('click', () => setView('session'));
+  $('traceTab').addEventListener('click', () => setView('trace'));
+  $('contextBtn').addEventListener('click', () => setContextOpen(!document.body.classList.contains('context-open')));
+  $('contextClose').addEventListener('click', () => setContextOpen(false));
+  $('contextBackdrop').addEventListener('click', () => setContextOpen(false));
   $('traceOrderAsc').addEventListener('click', () => setTraceOrder('asc'));
   $('traceOrderDesc').addEventListener('click', () => setTraceOrder('desc'));
   $('loadEarlierBtn').addEventListener('click', loadEarlier);
@@ -1911,6 +1945,12 @@ function wireEvents() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !$('modalBackdrop').classList.contains('hidden')) {
       closeModal();
+    } else if (event.key === 'Escape') {
+      setContextOpen(false);
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') {
+      event.preventDefault();
+      newRun();
     }
   });
   document.querySelectorAll('.example').forEach((button) => {
@@ -1929,6 +1969,7 @@ async function init() {
   updateCharCount();
   renderPhases();
   renderPhaseDetail();
+  setView('session');
   try {
     await loadInitial();
   } catch (error) {
