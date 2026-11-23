@@ -466,8 +466,9 @@ through a local Mem0 OSS sidecar. Memory is on by default
 no-op, so a memory outage never blocks a run.
 
 ```bash
-# Mem0 OSS sidecar; see the Mem0 quickstart for the compose file/image
-# API: http://127.0.0.1:8888  Dashboard: http://localhost:3000
+# Local sidecar: docker/mem0 (Mem0 API + FastEmbed BGE)
+# API: http://127.0.0.1:8888
+cd docker/mem0 && docker compose up -d
 AGENT_MEMORY_MODE=on
 AGENT_MEMORY_URL=http://127.0.0.1:8888
 AGENT_MEMORY_USER_ID=jade-local-user
