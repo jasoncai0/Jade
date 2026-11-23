@@ -74,6 +74,8 @@
 
 | 2026-11-24 01:12 | 补充 Mem0 sidecar 落地与端侧验收 | 文章 200，图 3 200 | blog commit `b06f927`；备份 `/home/ubuntu/backups/blog-20261124-011205` |
 
+| 2026-11-24 01:18 | 补充 BGE 最终 smoke 数据 | 文章 200 | blog commit `1018233`；备份 `/home/ubuntu/backups/blog-20261124-011836` |
+
 ## 待办
 
 - [x] 构建 Hugo 并发布 `coding-agent-pitfalls`。
