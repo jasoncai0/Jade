@@ -19,7 +19,7 @@
 | `local`（推荐） | 日常本地开发 | Docker + Postgres/pgvector + FastEmbed + DeepSeek | 本机 |
 | `cloud`（可选） | 没有本地 embedding 条件时 | Mem0 Platform API key | Mem0 云 |
 
-默认开启；设置 `AGENT_MEMORY_ENABLED=true` 可关闭。本地 sidecar 未启动或不可达时自动回退 `NoopMemoryService`，Jade 的行为与现在完全一致。
+默认 `AGENT_MEMORY_MODE=on`；设为 `off` 可关闭，设为 `shadow` 只读评估。本地 sidecar 未启动或不可达时自动回退 `NoopMemoryService`，run 继续。
 
 > 部署注意：Mem0 官方 REST 镜像当前只打包 OpenAI/Gemini 的 LLM 与 embedder。要用 FastEmbed + DeepSeek 的 `local` profile，需要在镜像里补 provider（或加一层很薄的 Python 适配器）。这是 Phase 0 必须先验证的部分；验证失败就退到 Mem0 Platform profile，不把外部依赖硬塞进 Jade。
 
@@ -188,7 +188,7 @@ Prompt 里明确三件事：记忆可能过时、不能覆盖当前指令、不�
 
 ### 失败
 
-- `AGENT_MEMORY_ENABLED=true` 或 sidecar 不可达：`NoopMemoryService`，run 继续。
+- `AGENT_MEMORY_MODE=off` 或 sidecar 不可达：`NoopMemoryService`，run 继续。
 - 连续 3 次失败：打开熔断 60 秒，UI Runtime 行显示 `memory unavailable`。
 - 召回超时：不注入记忆，继续模型调用。
 - 写入超时：丢弃候选，不重试到下一轮。
@@ -239,7 +239,7 @@ Jade 侧增加：
 ### 配置
 
 ```env
-AGENT_MEMORY_ENABLED=true
+AGENT_MEMORY_MODE=on          # on | shadow | off
 AGENT_MEMORY_PROVIDER=mem0-oss
 AGENT_MEMORY_URL=http://127.0.0.1:8888
 AGENT_MEMORY_API_KEY=
@@ -248,6 +248,7 @@ AGENT_MEMORY_TOP_K=5
 AGENT_MEMORY_TIMEOUT_MS=500
 AGENT_MEMORY_WRITE_TIMEOUT_MS=2000
 AGENT_MEMORY_PROJECT_SCOPE=true
+AGENT_MEMORY_TELEMETRY=true    # 只记 id/hash/计数，不记正文
 ```
 
 API key 仅用于本地 Mem0 的 `X-API-Key`；为空时使用 `AUTH_DISABLED=true`，且只绑定 `127.0.0.1`。
@@ -260,15 +261,15 @@ API key 仅用于本地 Mem0 的 `X-API-Key`；为空时使用 `AUTH_DISABLED=tr
 
 ### Phase 1：MemoryService + Noop（1 天）
 
-接口、配置、健康检查、熔断、日志脱敏；默认关闭，现有 143 个测试不变。
+接口、配置、健康检查、熔断、日志脱敏；先以 Noop 接入、默认不改变行为，Phase 2 完成后再切默认 `on`。现有 143 个测试不变。
 
 ### Phase 2：Context 召回（1 天）
 
-Context 阶段注入记忆块；prompt 边界；超时/空结果/失败回退；召回 trace 事件 `memory.recalled`。
+Context 阶段注入记忆块；prompt 边界；超时/空结果/失败回退；召回 trace 事件 `memory.recall.completed` / `memory.injected`。
 
 ### Phase 3：Checkpoint 异步写入（1 天）
 
-`MemoryPolicy`、候选提取、队列、去重、`memory.written`/`memory.write.failed` 事件；不阻塞 run。
+`MemoryPolicy`、候选提取、队列、去重、`memory.write.completed`/`memory.write.failed` 事件；不阻塞 run。
 
 ### Phase 4：管理与验证（1 天）
 
@@ -317,9 +318,97 @@ CLI `--memory-health`、Web Runtime 行、查看/删除/导出；集成测试；
 - 召回 precision@5（人工抽查）、错误记忆率、过期记忆率；
 - 召回 p95 延迟、prompt token 增量、Mem0 不可用次数。
 
-建议门槛：召回 p95 < 500ms；precision@5 ≥ 70%；错误记忆率 < 5%；重复说明减少 ≥ 20%；失败率不上升。达不到就保留功能但默认关闭，先修写入策略，不靠“多写记忆”掩盖召回质量问题。
+建议门槛：召回 p95 < 500ms；precision@5 ≥ 70%；错误记忆率 < 5%；重复说明减少 ≥ 20%；失败率不上升。达不到就把默认值回退到 `shadow` 或 `off`，先修写入策略，不靠“多写记忆”掩盖召回质量问题。
 
-## 13. 验收标准
+## 13. 量化与埋点
+
+### 13.1 收益口径
+
+先把“收益”拆成可测量的量，避免只看“感觉更聪明”：
+
+```text
+净收益 = 节省的重复劳动 + 减少的失败返工 - 记忆开销
+```
+
+主指标：
+
+1. `time_to_first_edit`：从 run 开始到第一次有效 `write_file`/`edit_file` 的秒数；按任务难度配对。
+2. `turns_to_success`：到 `SUCCEEDED` 的模型轮数；失败任务单独统计，不混入均值。
+3. `repeat_instruction_rate`：用户重复说明已存偏好的消息占比；用人工标注 + 关键词候选，不靠纯关键词下结论。
+4. `tool_failure_rate`：`tool.end{ok=false}` / 全部 `tool.end`；重点看环境类失败。
+5. `task_success_rate`：最终 `SUCCEEDED` 比例；这是护栏指标，不能下降。
+
+记忆专属指标：
+
+- `memory_hit_rate`：有至少 1 条被注入的 run 占比；
+- `precision@5`：抽 50 次召回，人工判断前 5 条中相关/正确的比例；
+- `wrong_memory_rate`：被用户标错、删除或被验证结果推翻的注入记忆比例；
+- `recall_latency_p95`、`injection_tokens`、`write_failures`；
+- `memory_feedback`：用户对单条记忆点“有用 / 错误 / 过时 / 删除”。
+
+成本：
+
+```text
+memory_cost = embedding_cost + extraction_cost
+            + recall_latency × run_count
+            + injection_tokens × model_price
+```
+
+本地 FastEmbed 主要是一次性模型下载和 CPU；如果换云 embedding，按实际 API 账单记，不用估算值冒充实测。
+
+### 13.2 埋点事件
+
+复用现有 `RunEventLog` 和 MySQL `jade_events`，新增事件：
+
+| 事件 | 关键字段 | 用途 |
+|---|---|---|
+| `memory.recall.started` | runId, projectId, queryHash, queryChars, mode | 统计召回频率和延迟 |
+| `memory.recall.completed` | candidateCount, selectedCount, latencyMs, topScore, hit | 召回质量、p95 |
+| `memory.injected` | runId, memoryIds, count, tokens, globalCount | 注入量、token 开销 |
+| `memory.write.queued` | runId, kind, source, infer, candidateChars | 写入策略分布 |
+| `memory.write.completed` | runId, memoryIds, latencyMs | 写入成功率 |
+| `memory.write.failed` | runId, reason, latencyMs | 失败分类 |
+| `memory.feedback` | runId, projectId, memoryId, action (`helpful`/`wrong`/`stale`/`delete`) | 错误记忆率 |
+
+约束：
+
+1. 不记录记忆正文、完整 query、文件内容、密钥；只记 id、hash、长度、计数、耗时、分数。
+2. `memory.injected` 只记被选中的 id 和 scope，不记文本；正文留在 Mem0。
+3. 事件仍走 compact 投影，`memory.*` 不进入 LLM 请求体。
+4. 事件写入失败不影响 run；埋点失败只写本地日志。
+
+### 13.3 实验设计
+
+用 `AGENT_MEMORY_MODE` 做三组：
+
+- `off`：不读不写，作为 baseline；
+- `shadow`：只读、只记召回结果，不注入、不写入；用来测 precision@5 和延迟，不影响任务；
+- `on`：召回 + 注入 + 写入，作为 treatment。
+
+先跑 2 天 shadow，确认召回不相关率可接受；再跑 2 周 A/B。每个项目至少 15 个可比任务，按任务模板和难度配对，奇偶 session 交替 on/off，记录同一项目的 `time_to_first_edit`、`turns_to_success`、失败率和 token。样本不足 10 对时只报原始值，不宣称显著性。
+
+分析用配对中位数和 bootstrap 95% 置信区间；`task_success_rate` 下降、`wrong_memory_rate` 超过 5%、或 p95 延迟超过 500ms 即触发回滚到 `shadow` 或 `off`。
+
+### 13.4 报表与查看
+
+- `GET /api/memory/metrics?from=&to=&project=`：返回计数、p50/p95、token 增量、失败率；只聚合，不返回记忆正文。
+- Web 管理面增加 “Memory” 区域：召回命中率、注入 token、错误记忆、最近召回列表（id + 摘要 + 分数）。
+- 单条记忆支持“有用 / 错误 / 过时 / 删除”；反馈写入 `memory.feedback`。
+- 所有报表都可以按 `project_id` 过滤，避免跨项目比较造成误判。
+
+### 13.5 判定线
+
+第一期不追求“记忆越多越好”，只验证四件事：
+
+1. `time_to_first_edit` 或 `turns_to_success` 有可重复的下降；
+2. 重复说明至少下降 20%；
+3. `task_success_rate` 不下降，`wrong_memory_rate < 5%`；
+4. 召回 p95 < 500ms，注入 token 中位数 < 800/轮。
+
+四项都达标才把默认值保持为 `on`；只满足召回质量但收益不明显，保留 `on` 但减少写入；收益为负就默认 `off`，把记忆降级为显式管理工具。
+
+
+## 14. 验收标准
 
 1. 关闭 memory 时，143 个测试全部通过，行为与当前一致。
 2. 开启 memory 后，新会话能召回上一会话写入的项目决策；召回 p95 < 500ms。
@@ -328,15 +417,15 @@ CLI `--memory-health`、Web Runtime 行、查看/删除/导出；集成测试；
 5. 两次相同写入不会产生重复记忆；一次 `infer=true` 的多条抽取有明确 id 可审计。
 6. 博客和设计文档中的架构图、生命周期图与实现一致。
 
-## 14. 已确认的决策
+## 15. 已确认的决策
 
-1. 默认开启；`AGENT_MEMORY_ENABLED=false` 可关闭。sidecar 不可达时回退 Noop。
+1. 默认开启；`AGENT_MEMORY_MODE=off` 可关闭，`shadow` 用于只读评估。sidecar 不可达时回退 Noop。
 2. 本地 embedding 使用 `BAAI/bge-small-en-v1.5`；Phase 0 先测中英文混合、冷启动和内存占用。
 3. 写入采用“用户原话 infer=true、系统结论 infer=false”的混合策略。
 4. 跨项目采用“项目隔离 + 显式全局偏好”，项目事实/决策/踩坑不跨项目。
 5. 管理面做 Web + API；CLI 只做 health。
 
-## 15. 参考
+## 16. 参考
 
 - Mem0 OSS REST API：<https://docs.mem0.ai/open-source/features/rest-api>
 - Mem0 自托管：<https://docs.mem0.ai/open-source/setup>
