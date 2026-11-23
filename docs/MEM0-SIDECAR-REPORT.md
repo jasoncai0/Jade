@@ -120,6 +120,22 @@ kind:       preference
 - Web Memory 弹窗：列表、刷新、导出 JSON、删除。
 - `DELETE /api/memory/{id}` 经 Mem0 删除，不影响其他项目。
 
+### 6.4 最终 BGE smoke（2026-11-24）
+
+由于本机 Docker 的 8888 端口代理未释放，sidecar 临时映射到 `8890`（Jade 的本地 `.env` 指向 8890）；容器仍是同一套 BGE + Mem0 + Qdrant 配置。
+
+```text
+status:     SUCCEEDED
+run:        run-c01e790a
+task:       Use four spaces for this project. Reply exactly memory-bge-ok.
+turns:      6 / 6
+memory.recall.completed: hit=true, topScore=0.7988, latencyMs=227, selectedCount=1
+memory.injected: count=1, tokens=89
+output:     memory-bge-ok
+```
+
+这同时验证了 BGE 语义召回、Jade 的 500ms 超时内完成，以及真实 DeepSeek 抽取链路。compose 默认端口仍是 8888；清理 Docker 端口代理后无需改配置。
+
 ## 7. 失败与边界
 
 | 场景 | 行为 |
