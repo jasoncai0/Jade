@@ -20,6 +20,8 @@
 
 默认关闭，显式设置 `AGENT_MEMORY_ENABLED=true` 才启用。没有 Mem0 时，Jade 的行为必须与现在完全一致。
 
+> 部署注意：Mem0 官方 REST 镜像当前只打包 OpenAI/Gemini 的 LLM 与 embedder。要用 FastEmbed + DeepSeek 的 `local` profile，需要在镜像里补 provider（或加一层很薄的 Python 适配器）。这是 Phase 0 必须先验证的部分；验证失败就退到 Mem0 Platform profile，不把外部依赖硬塞进 Jade。
+
 ## 2. 为什么需要它
 
 现有上下文机制解决“这一次任务内记得住”，不解决“下一次任务还记得”：
