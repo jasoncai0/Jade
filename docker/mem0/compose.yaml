@@ -1,0 +1,50 @@
+name: jade-mem0
+
+services:
+  mem0:
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    image: jade-mem0-sidecar:compose
+    ports:
+      - "127.0.0.1:8888:8000"
+    env_file:
+      - ../../.env
+    environment:
+      OPENAI_API_KEY: ${DEEPSEEK_API_KEY:?set DEEPSEEK_API_KEY in java-coding-agent/.env}
+      MEM0_LLM_BASE_URL: https://api.deepseek.com
+      MEM0_LLM_MODEL: deepseek-chat
+      MEM0_EMBED_BASE_URL: http://jade-embed:18092/v1
+    volumes:
+      - mem0_qdrant:/app/qdrant
+      - mem0_history:/app/history
+    depends_on:
+      - jade-embed
+    restart: unless-stopped
+
+  jade-embed:
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    image: jade-mem0-sidecar:compose
+    command: ["python", "/app/embed_server.py"]
+    environment:
+      EMBED_MODEL: BAAI/bge-small-en-v1.5
+      EMBED_PORT: "18092"
+      FASTEMBED_CACHE_PATH: /models
+      HF_HUB_OFFLINE: "1"
+    volumes:
+      - mem0_models:/models
+    expose:
+      - "18092"
+    restart: unless-stopped
+
+volumes:
+  mem0_qdrant:
+    name: jade_mem0_compose_qdrant
+  mem0_history:
+    name: jade_mem0_compose_history
+  mem0_models:
+    name: jade_mem0_models

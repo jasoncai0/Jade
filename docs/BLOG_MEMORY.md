@@ -49,6 +49,9 @@
 | 18 | 2026-11-16 | 长会话历史 | 96 MB / 12,786 事件的失败会话加载卡死；分页后 FAILED 变 RUNNING、token 回跳 | 启动即读全量 events；浏览器从 seq 0 重放全部事件；历史事件改写当前状态 | MySQL 存 snapshot+events；compact 分页 150；完整 body 按 seq 懒取；分页后重放 snapshot；改用已加载事件计数 | 会话 1.3 |
 | 19 | 2026-11-16 | 一次性 CLI | 产物和最终回答都已完成，CLI 仍挂 9 分钟；主线程停在 `RunEventLog.awaitAfter` | 为支持连续会话，`run.finished` 不再关闭事件日志；CLI 只等 `closed()`，不知道当前 run 已终止 | CLI 在已消费完事件且快照 terminal 时退出；补 `goal.review` 输出。连续会话/服务端仍保持日志打开 | 会话 1.1 |
 | 20 | 2026-11-16 | 上下文压缩 | 超预算但只剩三组时，截断结果被丢弃；旧对话被硬删，模型重复劳动 | `compacted` 只看 `removed > 0`；无 token 预算、无 pinned memory、无工具输出微压缩、无模型摘要 | token+字符双预算；system/首任务/最新用户组钉住；tool result 头尾压缩；旧组经无工具模型摘要回插；摘要失败退化说明；补截断生效测试 | 会话 1.4 |
+| 21 | 2026-11-24 | Mem0 sidecar | 官方 `mem0/mem0-api-server:latest` 启动即报 `Neither 'psycopg' nor 'psycopg2' library is available` | 官方镜像默认配置依赖 pgvector + Neo4j + OpenAI，镜像本身不装 psycopg | 本地改为官方 API 代码 + Qdrant local + DeepSeek + OpenAI-compatible embedder；Dockerfile 在 `docker/mem0/` | Mem0 10.1 |
+| 22 | 2026-11-24 | BGE embedding | Mem0 0.1.117 配置 `fastembed` 报 `Unsupported embedding provider`；HF 模型下载卡在约 740 KB | 该版本 embedder factory 不含 fastembed；HuggingFace 直连/镜像不稳定 | 单独起 `jade-embed` FastEmbed 服务，Mem0 走 OpenAI-compatible `/v1/embeddings`；用 8 段 Range 下载 66,465,124 字节 ONNX 并离线加载 | Mem0 10.2 |
+| 23 | 2026-11-24 | Mem0 冷启动 | BGE 首次召回 656 ms，超过 Jade 500 ms 超时；预热后 310–414 ms | ONNX 首次加载/初始化成本 | sidecar 启动后先跑 warm-up query；或把首次超时单独放宽 | Mem0 10.3 |
 
 ## 发布记录
 
@@ -68,6 +71,8 @@
 | 2026-11-16 17:43 | 补充上下文压缩管线 | 线上 200，8.4 节可见 | blog commit `9e8056d`；基线更新；备份 `/home/ubuntu/backups/blog-20261116-174350` |
 | 2026-11-16 18:29 | 补充反思机制、循环护栏与一次性 CLI 坑 | 线上 200，2.1 节与图可见 | blog commit `d63bcfe`；基线更新；备份 `/home/ubuntu/backups/blog-20261116-182936` |
 | 2026-11-16 18:33 | 拆分为总览 + 3 篇专题 | 4 篇线上 200；4 张图 200 | blog commit `ab88ee9`；备份 `/home/ubuntu/backups/blog-20261116-183316` |
+
+| 2026-11-24 01:12 | 补充 Mem0 sidecar 落地与端侧验收 | 文章 200，图 3 200 | blog commit `b06f927`；备份 `/home/ubuntu/backups/blog-20261124-011205` |
 
 ## 待办
 
