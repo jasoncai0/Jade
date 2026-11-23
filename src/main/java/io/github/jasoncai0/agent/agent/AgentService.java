@@ -11,6 +11,8 @@ import io.github.jasoncai0.agent.llm.ChatMessage;
 import io.github.jasoncai0.agent.llm.DeepSeekClient;
 import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.mcp.McpManager;
+import io.github.jasoncai0.agent.memory.MemoryService;
+import io.github.jasoncai0.agent.memory.MemoryServices;
 import io.github.jasoncai0.agent.skill.Skill;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.tool.Tool;
@@ -71,6 +73,7 @@ public final class AgentService implements AutoCloseable {
     private final SkillRegistry skills;
     private final ToolRegistry tools;
     private final McpManager mcp;
+    private final MemoryService memory;
     private final ExecutorService executor;
     private final EventStore eventStore;
     private final Map<String, AgentRun> runs = new ConcurrentHashMap<>();
@@ -94,6 +97,7 @@ public final class AgentService implements AutoCloseable {
         this.skills = SkillRegistry.load(config.skillsDir());
         this.tools = BuiltInTools.registry();
         this.mcp = McpManager.connect(config.projectRoot(), this.tools);
+        this.memory = MemoryServices.create(config.memory());
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
             Files.createDirectories(config.workspacesDir());
@@ -108,6 +112,7 @@ public final class AgentService implements AutoCloseable {
                 "model", config.llm().model(),
                 "skills", skills.all().size(),
                 "tools", tools.names().size(),
+                "memory", memory.health().available(),
                 "apiKeyConfigured", config.hasApiKey()
         ));
     }
@@ -496,7 +501,8 @@ public final class AgentService implements AutoCloseable {
         try {
             AgentLoop loop = new AgentLoop(
                     llm, toolsForRun(run), skills, config.agent(), config.llm().maxOutputTokens(),
-                    new Verifier(), run.permissions(), run.permissionSession(), run.questions())
+                    new Verifier(), run.permissions(), run.permissionSession(), run.questions(),
+                    new LlmGoalReviewer(llm), memory)
                     .withLiveDeltas(run.deltas());
             RunSnapshot snapshot = continuation
                     ? loop.continueSession(userMessage, RunArtifacts.loadMessages(workspace.root()),
@@ -623,6 +629,7 @@ public final class AgentService implements AutoCloseable {
         summary.put("toolCount", tools.names().size());
         summary.put("skillCount", skills.all().size());
         summary.put("mcp", mcp.summary());
+        summary.put("memory", memory.health().toMap());
         summary.put("languages", Language.ids());
         CommandSandbox sandbox = new CommandRunner().sandbox();
         summary.put("sandbox", sandbox.modeName());
@@ -655,6 +662,10 @@ public final class AgentService implements AutoCloseable {
 
     public McpManager mcp() {
         return mcp;
+    }
+
+    public MemoryService memory() {
+        return memory;
     }
 
     public SkillRegistry skills() {
@@ -845,6 +856,7 @@ public final class AgentService implements AutoCloseable {
             Thread.currentThread().interrupt();
         }
         mcp.close();
+        memory.close();
         for (AgentRun run : runs.values()) {
             run.permissions().close();
             run.questions().close();

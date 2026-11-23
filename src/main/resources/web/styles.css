@@ -2327,3 +2327,12 @@ body {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* Memory management */
+.modal-actions { display: flex; gap: 8px; margin: 16px 0 18px; }
+.memory-list { display: flex; flex-direction: column; gap: 8px; }
+.memory-item { display: flex; align-items: flex-start; gap: 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.memory-copy { flex: 1; min-width: 0; }
+.memory-text { color: var(--ink); line-height: 1.5; overflow-wrap: anywhere; }
+.memory-meta { margin-top: 5px; color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.ghost.danger { color: #ff9d8a; border-color: rgba(255,157,138,.25); }

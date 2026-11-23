@@ -1,5 +1,7 @@
 package io.github.jasoncai0.agent.config;
 
+import io.github.jasoncai0.agent.memory.MemoryMode;
+import io.github.jasoncai0.agent.memory.MemorySettings;
 import io.github.jasoncai0.agent.permission.PermissionMode;
 
 import java.nio.file.Path;
@@ -14,13 +16,20 @@ public record AppConfig(
         LlmSettings llm,
         AgentSettings agent,
         ServerSettings server,
-        MysqlSettings mysql
+        MysqlSettings mysql,
+        MemorySettings memory
 ) {
 
     /** Backwards-compatible constructor for tests and embedded use. */
     public AppConfig(Path projectRoot, Path skillsDir, Path workspacesDir, LlmSettings llm,
                      AgentSettings agent, ServerSettings server) {
-        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, null);
+        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, null, null);
+    }
+
+    /** Backwards-compatible constructor before long-term memory was added. */
+    public AppConfig(Path projectRoot, Path skillsDir, Path workspacesDir, LlmSettings llm,
+                     AgentSettings agent, ServerSettings server, MysqlSettings mysql) {
+        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, mysql, null);
     }
     public static final String VERSION = "1.4.0";
 
@@ -67,6 +76,19 @@ public record AppConfig(
                 value(get, "JADE_MYSQL_USER", "jade"),
                 value(get, "JADE_MYSQL_PASSWORD", "jade_dev_password")
         );
+        MemorySettings memory = new MemorySettings(
+                MemoryMode.fromId(value(get, "AGENT_MEMORY_MODE", "on")),
+                value(get, "AGENT_MEMORY_PROVIDER", MemorySettings.DEFAULT_PROVIDER),
+                value(get, "AGENT_MEMORY_URL", MemorySettings.DEFAULT_BASE_URL),
+                value(get, "AGENT_MEMORY_API_KEY", ""),
+                value(get, "AGENT_MEMORY_USER_ID", MemorySettings.DEFAULT_USER_ID),
+                integer(get, "AGENT_MEMORY_TOP_K", MemorySettings.DEFAULT_TOP_K, 1, 20),
+                integer(get, "AGENT_MEMORY_RECALL_TIMEOUT_MS", MemorySettings.DEFAULT_RECALL_TIMEOUT_MS,
+                        50, 10_000),
+                integer(get, "AGENT_MEMORY_WRITE_TIMEOUT_MS", MemorySettings.DEFAULT_WRITE_TIMEOUT_MS,
+                        100, 30_000),
+                bool(get, "AGENT_MEMORY_TELEMETRY", true)
+        );
         return new AppConfig(
                 root,
                 path(root, get, "AGENT_SKILLS_DIR", "skills"),
@@ -74,7 +96,8 @@ public record AppConfig(
                 llm,
                 agent,
                 server,
-                mysql
+                mysql,
+                memory
         );
     }
 

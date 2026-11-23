@@ -153,6 +153,28 @@ public final class WebServer implements AutoCloseable {
             sendData(exchange, 200, agentService.mcp().summary());
             return;
         }
+        if (path.equals("/api/memory/health") && method.equals("GET")) {
+            sendData(exchange, 200, agentService.memory().health().toMap());
+            return;
+        }
+        if (path.equals("/api/memory") && method.equals("GET")) {
+            io.github.jasoncai0.agent.memory.MemoryScope scope = agentService.memory()
+                    .scope(agentService.config().workspacesDir(), "management");
+            sendData(exchange, 200, agentService.memory().list(scope, 100));
+            return;
+        }
+        if (path.equals("/api/memory/export") && method.equals("GET")) {
+            io.github.jasoncai0.agent.memory.MemoryScope scope = agentService.memory()
+                    .scope(agentService.config().workspacesDir(), "management");
+            sendData(exchange, 200, agentService.memory().export(scope));
+            return;
+        }
+        if (path.startsWith("/api/memory/") && method.equals("DELETE")) {
+            String id = path.substring("/api/memory/".length());
+            agentService.memory().forget(id);
+            sendData(exchange, 200, java.util.Map.of("deleted", id));
+            return;
+        }
         if (path.equals("/api/skills") && method.equals("GET")) {
             sendData(exchange, 200, agentService.skillDescriptions());
             return;

@@ -11,6 +11,14 @@ import io.github.jasoncai0.agent.llm.ChatResult;
 import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.llm.LlmException;
 import io.github.jasoncai0.agent.llm.ToolCall;
+import io.github.jasoncai0.agent.memory.MemoryCandidate;
+import io.github.jasoncai0.agent.memory.MemoryContext;
+import io.github.jasoncai0.agent.memory.MemoryItem;
+import io.github.jasoncai0.agent.memory.MemoryMode;
+import io.github.jasoncai0.agent.memory.MemoryPolicy;
+import io.github.jasoncai0.agent.memory.MemoryScope;
+import io.github.jasoncai0.agent.memory.MemoryService;
+import io.github.jasoncai0.agent.memory.NoopMemoryService;
 import io.github.jasoncai0.agent.permission.PermissionResult;
 import io.github.jasoncai0.agent.permission.PermissionSession;
 import io.github.jasoncai0.agent.question.QuestionBroker;
@@ -47,6 +55,7 @@ public final class AgentLoop {
     private final PermissionSession permissionSession;
     private final QuestionBroker questionBroker;
     private final GoalReviewer goalReviewer;
+    private final MemoryService memory;
     private final ContextCompactor compactor = new ContextCompactor();
     private final ToolLoopGuard loopGuard = new ToolLoopGuard();
     /** Live delta sink; null means nobody is watching, so deltas are dropped. */
@@ -83,6 +92,14 @@ public final class AgentLoop {
               AgentSettings settings, int maxOutputTokens, Verifier verifier,
               PermissionBroker permissionBroker, PermissionSession permissionSession,
               QuestionBroker questionBroker, GoalReviewer goalReviewer) {
+        this(llm, tools, skills, settings, maxOutputTokens, verifier, permissionBroker,
+                permissionSession, questionBroker, goalReviewer, NoopMemoryService.off());
+    }
+
+    AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
+              AgentSettings settings, int maxOutputTokens, Verifier verifier,
+              PermissionBroker permissionBroker, PermissionSession permissionSession,
+              QuestionBroker questionBroker, GoalReviewer goalReviewer, MemoryService memory) {
         this.llm = llm;
         this.tools = tools;
         this.skills = skills;
@@ -93,6 +110,7 @@ public final class AgentLoop {
         this.permissionSession = permissionSession == null ? new PermissionSession() : permissionSession;
         this.questionBroker = questionBroker == null ? new QuestionBroker() : questionBroker;
         this.goalReviewer = goalReviewer == null ? GoalReviewer.NOOP : goalReviewer;
+        this.memory = memory == null ? NoopMemoryService.off() : memory;
     }
 
     /** Routes streaming deltas to a live bus (browser SSE). Optional. */
@@ -217,15 +235,18 @@ public final class AgentLoop {
         state.beginTurn();
         List<Skill> selected = skills.select(task, 2);
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(ChatMessage.system(buildSystemPrompt(task, workspace, selected)));
-        messages.add(ChatMessage.user(buildInitialUserMessage(task, workspace)));
         Log.info("agent.run.start", Map.of(
                 "runId", state.id(),
                 "workspace", workspace.root().getFileName().toString(),
                 "taskChars", task.length()
         ));
         log.emit("run.started", eventMap("snapshot", state.snapshot()));
-        return runTurn(task, workspace, state, log, control, messages, selected, false);
+        String memoryBlock = recallMemory(task, workspace, state, log);
+        String system = buildSystemPrompt(task, workspace, selected);
+        if (!memoryBlock.isBlank()) system = system + "\n\n" + memoryBlock;
+        messages.add(ChatMessage.system(system));
+        messages.add(ChatMessage.user(buildInitialUserMessage(task, workspace)));
+        return runTurn(task, workspace, state, log, control, messages, selected, false, task);
     }
 
     /**
@@ -242,6 +263,9 @@ public final class AgentLoop {
         if (messages.isEmpty() || messages.get(0).role() != io.github.jasoncai0.agent.llm.Role.SYSTEM) {
             messages.add(0, ChatMessage.system(buildSystemPrompt(state.task(), workspace, selected)));
         }
+        String memoryQuery = memoryQuery(message, messages);
+        String memoryBlock = recallMemory(memoryQuery, workspace, state, log);
+        if (!memoryBlock.isBlank()) messages = MemoryContext.inject(messages, memoryBlock);
         messages.add(ChatMessage.user(message));
         Log.info("agent.turn.start", Map.of(
                 "runId", state.id(),
@@ -250,13 +274,13 @@ public final class AgentLoop {
                 "messages", messages.size()
         ));
         log.emit("turn.started", eventMap("message", message, "snapshot", state.snapshot()));
-        return runTurn(state.task(), workspace, state, log, control, messages, selected, true);
+        return runTurn(state.task(), workspace, state, log, control, messages, selected, true, message);
     }
 
     private RunSnapshot runTurn(String task, Workspace workspace, RunState state,
                                 RunEventLog log, RunControl control,
                                 List<ChatMessage> messages, List<Skill> selected,
-                                boolean continuation) {
+                                boolean continuation, String userMessage) {
         ToolContext context = new ToolContext(workspace, settings, skills, state, verifier,
                 state.id(), log, questionBroker, control);
         ToolOutputStore spill = new ToolOutputStore(workspace.root());
@@ -487,6 +511,7 @@ public final class AgentLoop {
                             continue;
                         }
                     }
+                    maybeWriteMemory(userMessage, workspace, state, log);
                     state.succeed(answer);
                     log.emit("run.succeeded", eventMap("answer", answer, "usage", state.usage()));
                     completed = true;
@@ -545,6 +570,107 @@ public final class AgentLoop {
             ));
         }
         return state.snapshot();
+    }
+
+    private String memoryQuery(String latest, List<ChatMessage> history) {
+        StringBuilder query = new StringBuilder(latest == null ? "" : latest.strip());
+        int seen = 0;
+        for (int i = history.size() - 1; i >= 0 && seen < 2; i--) {
+            ChatMessage message = history.get(i);
+            if (message.role() == io.github.jasoncai0.agent.llm.Role.USER
+                    && message.content() != null && !message.content().isBlank()) {
+                query.append("\n").append(message.content().strip());
+                seen++;
+            }
+        }
+        String text = query.toString();
+        return text.length() <= 2_000 ? text : text.substring(0, 2_000);
+    }
+
+    /**
+     * Recall is advisory and fail-soft: a missing or slow sidecar must never
+     * change the run outcome. Shadow mode logs candidates but injects nothing.
+     */
+    private String recallMemory(String query, Workspace workspace, RunState state, RunEventLog log) {
+        MemoryService service = memory;
+        if (service == null || !service.health().available() || !service.mode().active()) {
+            return "";
+        }
+        MemoryScope scope = service.scope(workspace.root(), state.id());
+        String clean = query == null ? "" : query.strip();
+        if (clean.isBlank()) return "";
+        long start = System.nanoTime();
+        String hash = MemoryContext.queryHash(clean);
+        log.emit("memory.recall.started", eventMap(
+                "queryHash", hash,
+                "queryChars", clean.length(),
+                "mode", service.mode().id()
+        ));
+        try {
+            List<MemoryItem> candidates = service.recall(clean, scope, MemoryPolicy.MAX_RECALL);
+            List<MemoryItem> selected = MemoryPolicy.select(candidates, scope);
+            long latency = (System.nanoTime() - start) / 1_000_000;
+            log.emit("memory.recall.completed", eventMap(
+                    "queryHash", hash,
+                    "candidateCount", candidates.size(),
+                    "selectedCount", selected.size(),
+                    "latencyMs", latency,
+                    "topScore", selected.isEmpty() ? 0.0 : selected.get(0).score(),
+                    "hit", !selected.isEmpty()
+            ));
+            if (service.mode() == MemoryMode.SHADOW || selected.isEmpty()) {
+                return "";
+            }
+            String block = MemoryContext.block(selected);
+            long globals = selected.stream().filter(MemoryItem::global).count();
+            log.emit("memory.injected", eventMap(
+                    "memoryIds", selected.stream().map(MemoryItem::id).toList(),
+                    "count", selected.size(),
+                    "globalCount", globals,
+                    "tokens", MemoryContext.tokenEstimate(block)
+            ));
+            return block;
+        } catch (RuntimeException e) {
+            Log.warn("memory.recall.failed", Map.of("runId", state.id(),
+                    "error", String.valueOf(e.getMessage())));
+            log.emit("memory.recall.failed", eventMap(
+                    "queryHash", hash,
+                    "reason", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()
+            ));
+            return "";
+        }
+    }
+
+    /** Writes only explicit user preferences/decisions, and never blocks the turn. */
+    private void maybeWriteMemory(String userMessage, Workspace workspace, RunState state, RunEventLog log) {
+        MemoryService service = memory;
+        if (service == null || !service.health().available() || service.mode() != MemoryMode.ON) {
+            return;
+        }
+        MemoryScope scope = service.scope(workspace.root(), state.id());
+        MemoryCandidate candidate = MemoryPolicy.candidateFromUserMessage(userMessage, scope).orElse(null);
+        if (candidate == null) return;
+        log.emit("memory.write.queued", eventMap(
+                "kind", candidate.kind(),
+                "source", candidate.source(),
+                "infer", candidate.infer(),
+                "candidateChars", candidate.text().length()
+        ));
+        Thread.ofVirtual().name("jade-memory-write").start(() -> {
+            long start = System.nanoTime();
+            try {
+                String id = service.remember(candidate, scope);
+                log.emit("memory.write.completed", eventMap(
+                        "memoryIds", id == null || id.isBlank() ? List.of() : List.of(id),
+                        "latencyMs", (System.nanoTime() - start) / 1_000_000
+                ));
+            } catch (RuntimeException e) {
+                log.emit("memory.write.failed", eventMap(
+                        "reason", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(),
+                        "latencyMs", (System.nanoTime() - start) / 1_000_000
+                ));
+            }
+        });
     }
 
     private void rejectToolCalls(List<ToolCall> calls, List<ChatMessage> messages, String reason,

@@ -170,6 +170,10 @@ function applyConfig(config) {
   $('mcpMode').textContent = mcp.configured
     ? `${mcp.serverCount || 0} server${(mcp.serverCount || 0) === 1 ? '' : 's'} · ${mcp.toolCount || 0} tools`
     : 'off';
+  const memory = config.memory || {};
+  $('memoryMode').textContent = memory.available
+    ? `${memory.provider || 'mem0'} · ${memory.mode || 'on'}`
+    : memory.mode && memory.mode !== 'off' ? 'unavailable' : 'off';
   setKeyState(config);
   if (!$('runView').classList.contains('hidden')) return;
   if (config.maxSteps !== undefined) {
@@ -1768,6 +1772,75 @@ function modalLoading(message) {
   $('modalBody').appendChild(el('p', 'modal-lede', message));
 }
 
+
+async function showMemory() {
+  openModal('Memory');
+  modalLoading('Reading Mem0 memory...');
+  try {
+    const [health, items] = await Promise.all([
+      api('/api/memory/health'),
+      api('/api/memory')
+    ]);
+    const body = $('modalBody');
+    body.replaceChildren();
+    const status = el('p', 'modal-lede',
+      health.available
+        ? `Connected to ${health.endpoint || 'Mem0'} · ${items.length} memor${items.length === 1 ? 'y' : 'ies'} for this project.`
+        : `Memory is ${health.mode || 'off'} · ${health.message || 'not connected'}.`);
+    body.appendChild(status);
+    const actions = el('div', 'modal-actions');
+    const refresh = el('button', 'ghost', 'Refresh');
+    refresh.type = 'button';
+    refresh.addEventListener('click', showMemory);
+    const exportButton = el('button', 'ghost', 'Export JSON');
+    exportButton.type = 'button';
+    exportButton.addEventListener('click', async () => {
+      try {
+        const data = await api('/api/memory/export');
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = 'jade-memories.json';
+        link.click();
+        URL.revokeObjectURL(link.href);
+      } catch (error) {
+        toast(error.message, true);
+      }
+    });
+    actions.append(refresh, exportButton);
+    body.appendChild(actions);
+    if (!items.length) {
+      body.appendChild(el('p', 'modal-lede', 'No stored memories for this project yet.'));
+      return;
+    }
+    const list = el('div', 'memory-list');
+    items.forEach((item) => {
+      const row = el('div', 'memory-item');
+      const copy = el('div', 'memory-copy');
+      copy.append(
+        el('div', 'memory-text', item.text || ''),
+        el('div', 'memory-meta', [item.kind, item.scope, item.projectId && item.projectId !== item.scope ? item.projectId : null].filter(Boolean).join(' · '))
+      );
+      const forget = el('button', 'ghost danger', 'Delete');
+      forget.type = 'button';
+      forget.addEventListener('click', async () => {
+        if (!confirm('Delete this memory?')) return;
+        try {
+          await api(`/api/memory/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+          showMemory();
+        } catch (error) {
+          toast(error.message, true);
+        }
+      });
+      row.append(copy, forget);
+      list.appendChild(row);
+    });
+    body.appendChild(list);
+  } catch (error) {
+    $('modalBody').replaceChildren(el('div', 'modal-error', error.message));
+  }
+}
+
 function showHowItWorks() {
   openModal('How the agent works');
   const body = $('modalBody');
@@ -1938,6 +2011,7 @@ function wireEvents() {
   $('howBtn').addEventListener('click', showHowItWorks);
   $('skillsBtn').addEventListener('click', showSkills);
   $('toolsBtn').addEventListener('click', showTools);
+  $('memoryBtn').addEventListener('click', showMemory);
   $('modalClose').addEventListener('click', closeModal);
   $('modalBackdrop').addEventListener('click', (event) => {
     if (event.target === $('modalBackdrop')) closeModal();

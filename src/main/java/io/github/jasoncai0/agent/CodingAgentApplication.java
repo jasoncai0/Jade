@@ -10,6 +10,8 @@ import io.github.jasoncai0.agent.config.AgentSettings;
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
 import io.github.jasoncai0.agent.mcp.McpConfig;
+import io.github.jasoncai0.agent.memory.MemoryService;
+import io.github.jasoncai0.agent.memory.MemoryServices;
 import io.github.jasoncai0.agent.permission.PermissionDecision;
 import io.github.jasoncai0.agent.permission.PermissionScope;
 import io.github.jasoncai0.agent.question.QuestionMode;
@@ -129,6 +131,11 @@ public final class CodingAgentApplication {
                     ? "off (create mcp.json from mcp.json.example)"
                     : mcp.servers().size() + " configured " + mcp.servers().stream()
                     .map(server -> server.name() + ":" + server.transport()).toList()));
+            try (MemoryService memory = MemoryServices.create(config.memory())) {
+                System.out.println("memory           " + memory.health().message()
+                        + " mode=" + memory.mode().id()
+                        + (memory.health().available() ? " endpoint=" + memory.health().endpoint() : ""));
+            }
             System.out.println("languages        " + String.join(", ", Language.displayNames()));
             Files.createDirectories(config.workspacesDir());
             System.out.println("workspaces       writable=" + Files.isWritable(config.workspacesDir()));
@@ -448,6 +455,6 @@ public final class CodingAgentApplication {
                     options.port() == null ? server.port() : options.port());
         }
         return new AppConfig(config.projectRoot(), config.skillsDir(), config.workspacesDir(),
-                config.llm(), agent, server, config.mysql());
+                config.llm(), agent, server, config.mysql(), config.memory());
     }
 }

@@ -457,6 +457,34 @@ MCP scope in this version is tools and resources (no prompts, sampling or
 OAuth login). A server failure is reported and does not prevent Jade from
 starting. Do not put a literal token in `mcp.json`; use `${VAR}` references.
 
+
+## Long-term memory (Mem0)
+
+Jade can recall durable project facts and explicit preferences across sessions
+through a local Mem0 OSS sidecar. Memory is on by default
+(`AGENT_MEMORY_MODE=on`); a missing or unreachable sidecar falls back to a
+no-op, so a memory outage never blocks a run.
+
+```bash
+# Mem0 OSS sidecar; see the Mem0 quickstart for the compose file/image
+# API: http://127.0.0.1:8888  Dashboard: http://localhost:3000
+AGENT_MEMORY_MODE=on
+AGENT_MEMORY_URL=http://127.0.0.1:8888
+AGENT_MEMORY_USER_ID=jade-local-user
+```
+
+At the start of every run Jade searches project-scoped memories and injects a
+small, clearly marked untrusted block into the system prompt. At a successful
+checkpoint it extracts only explicit preferences/project decisions from the
+user's message; credentials, `.env` content, and small talk are rejected.
+`shadow` mode retrieves and logs candidates without injecting them; `off`
+disables both paths. Project isolation is the default; global memories are
+limited to explicit preferences and surfaced in the memory management dialog.
+
+The Memory dialog lists, exports, and deletes memories. `GET /api/memory` and
+`GET /api/memory/export` return the current project scope; `DELETE
+/api/memory/{id}` removes one. Health is at `GET /api/memory/health`.
+
 ## HTTP API
 
 All JSON responses use:
@@ -473,6 +501,10 @@ Errors use the HTTP status as `code` and `data: null`.
 | GET | `/api/config` | non-secret runtime configuration |
 | GET | `/api/tools` | registered tools and JSON schemas |
 | GET | `/api/mcp` | MCP server status and discovered tool count |
+| GET | `/api/memory/health` | Mem0 sidecar health and mode |
+| GET | `/api/memory` | project-scoped memories |
+| GET | `/api/memory/export` | export project memories as JSON |
+| DELETE | `/api/memory/{id}` | delete one memory |
 | GET | `/api/skills` | discovered skills |
 | GET | `/api/runs` | run snapshots, newest first |
 | POST | `/api/runs` | start `{task, workspace?}`; returns 202 |
@@ -577,6 +609,15 @@ Environment variables take precedence over `.env`:
 | `AGENT_SKILLS_DIR` | `skills` | skill root |
 | `AGENT_SKILL_PRELOAD` | `true` | preload top-2 skill bodies (≤4,000 chars each); `false` = catalog only, load on demand |
 | `AGENT_WORKSPACES_DIR` | `agent-workspaces` | run root |
+| `AGENT_MEMORY_MODE` | `on` | `on`, `shadow`, or `off`; missing sidecar falls back to no-op |
+| `AGENT_MEMORY_URL` | `http://127.0.0.1:8888` | Mem0 OSS REST endpoint |
+| `AGENT_MEMORY_PROVIDER` | `mem0-oss` | provider label |
+| `AGENT_MEMORY_API_KEY` | empty | optional `X-API-Key` for Mem0 |
+| `AGENT_MEMORY_USER_ID` | `jade-local-user` | Mem0 user scope |
+| `AGENT_MEMORY_TOP_K` | `5` | max recalled memories |
+| `AGENT_MEMORY_RECALL_TIMEOUT_MS` | `500` | recall timeout |
+| `AGENT_MEMORY_WRITE_TIMEOUT_MS` | `2000` | async write timeout |
+| `AGENT_MEMORY_TELEMETRY` | `true` | emit memory metric events |
 | `JADE_MCP_CONFIG` | `mcp.json` | MCP server config; missing file disables MCP |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | empty | GitHub PAT referenced by the example MCP config |
 
@@ -586,7 +627,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 143 tests:
+The suite has 149 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -606,6 +647,7 @@ The suite has 143 tests:
   token-budget stop, and an explicit positive turn cap
 - command sandbox write denial and SDK-directory exclusion
 - HTTP API and SSE replay against a real local server and a fake model
+- Mem0 HTTP health/recall/write, API key propagation, scoped selection, secret rejection, and prompt-block replacement
 - MySQL/MyBatis event-store pagination, compact LLM bodies, full-payload lookup, and batch import
   (skipped automatically when the Docker MySQL instance is not running)
 - restart retention: a finished run is reloaded with its events, transcript, and files;

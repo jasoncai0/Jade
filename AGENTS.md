@@ -40,7 +40,7 @@ MySQL 用 `docker compose up -d`；数据库 `jade`，端口 `127.0.0.1:3307`。
 - 会话：持续追问、重启恢复、fork、MySQL 历史分页、Trace 正/倒序、历史页面懒加载。
 - 安全与正确性：四档权限（balanced 默认）、审批卡、Goal review、反思机制、重复工具/命令形状/无进展护栏、可选 token 预算。
 - 上下文：pinned memory、工具输出 micro-compaction、模型摘要、溢出重试与 spill（见 `docs/DSH-GAP-ANALYSIS.md`）。
-- 扩展：MCP tools + resources（stdio / Streamable HTTP）、只读子代理、技能目录开关。
+- 扩展：Mem0 长期记忆（项目隔离；`AGENT_MEMORY_MODE=on|shadow|off`，sidecar 不可达自动 Noop）、MCP tools + resources（stdio / Streamable HTTP）、只读子代理、技能目录开关。
 - 观测：SSE、完整请求体 Trace、运行指标、沙箱状态 health/banner。
 
 ## 关键约束与已知限制
@@ -55,6 +55,7 @@ MySQL 用 `docker compose up -d`；数据库 `jade`，端口 `127.0.0.1:3307`。
 ## 文档索引
 
 - `README.md`：功能、API、配置、测试。
+- `docs/superpowers/specs/2026-11-23-mem0-memory-design.md`：Mem0 方案、收益评估与埋点。
 - `docs/ARCHITECTURE.md`：组件、阶段、事件、并发。
 - `docs/DEMO.md`：演示脚本。
 - `docs/PERMISSIONS.md`、`docs/SANDBOX.md`：权限与沙箱边界。

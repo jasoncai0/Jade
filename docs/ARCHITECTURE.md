@@ -516,3 +516,20 @@ The suite uses no real API key:
 - a real `WebServer` + `AgentService` + fake model for REST/SSE integration
 
 `mvn test` is the authoritative check. `mvn package` adds the shaded jar.
+
+## 10. Long-term memory (Mem0)
+
+Jade treats memory as an optional sidecar, never as a second transcript. The
+`memory` package defines `MemoryService`, with `Mem0HttpMemoryService` for the
+local OSS REST API and `NoopMemoryService` for the fallback. `MemoryPolicy`
+allows only explicit user preferences and project decisions; credentials and
+small talk are rejected. `MemoryContext` injects the recalled block into the
+first system message behind a fixed marker and labels it untrusted, so stale
+memories cannot silently override the current task.
+
+Recall runs in the Context phase and is bounded by the configured timeout. A
+failed recall emits a metric event and continues. Writes run after a successful
+checkpoint on a virtual thread, so Mem0 latency never extends the run. The
+default scope is project isolation; global items are limited to explicit
+preferences and are capped during selection. `AGENT_MEMORY_MODE` supports `on`,
+`shadow` (retrieve and log without injecting), and `off`.
