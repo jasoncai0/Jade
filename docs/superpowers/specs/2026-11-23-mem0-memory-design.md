@@ -1,6 +1,7 @@
 # Mem0 长期记忆集成方案
 
-- 状态：待 review，尚未实施
+- 状态：已 review（2026-11-23），待实施
+- 评审结论：默认开启、本地 FastEmbed、混合写入、管理面 Web + API；跨项目采用“项目隔离 + 显式全局偏好”
 - 日期：2026-11-23
 - 范围：Jade 本地 coding agent 的跨会话长期记忆
 - 相关图：`diagrams/01-memory-architecture.svg`、`diagrams/02-memory-lifecycle.svg`
@@ -18,7 +19,7 @@
 | `local`（推荐） | 日常本地开发 | Docker + Postgres/pgvector + FastEmbed + DeepSeek | 本机 |
 | `cloud`（可选） | 没有本地 embedding 条件时 | Mem0 Platform API key | Mem0 云 |
 
-默认关闭，显式设置 `AGENT_MEMORY_ENABLED=true` 才启用。没有 Mem0 时，Jade 的行为必须与现在完全一致。
+默认开启；设置 `AGENT_MEMORY_ENABLED=true` 可关闭。本地 sidecar 未启动或不可达时自动回退 `NoopMemoryService`，Jade 的行为与现在完全一致。
 
 > 部署注意：Mem0 官方 REST 镜像当前只打包 OpenAI/Gemini 的 LLM 与 embedder。要用 FastEmbed + DeepSeek 的 `local` profile，需要在镜像里补 provider（或加一层很薄的 Python 适配器）。这是 Phase 0 必须先验证的部分；验证失败就退到 Mem0 Platform profile，不把外部依赖硬塞进 Jade。
 
@@ -112,6 +113,25 @@ metadata:
 
 召回时按 `user_id + agent_id` 过滤，再在 Jade 侧校验 `metadata.project_id`；不能只依赖 `run_id`，否则换会话就失忆。跨项目记忆默认不混用，用户显式勾选“全局偏好”才写 `project_id=global`。
 
+### 6.1 隔离策略：项目隔离还是全局共享
+
+三种选择：
+
+| 策略 | 好处 | 代价 |
+|---|---|---|
+| 全局共享 | 用户偏好、沟通风格、常用命令一次写入，所有项目可用；冷启动最少 | 项目路径、构建命令、端口、目录约定会串味；一个项目的错误决策会污染另一个项目；隐私和删除边界更大 |
+| 严格项目隔离 | 召回精度高；错误影响面小；删除/导出按项目清楚 | 每个新项目都要重新积累；通用的“中文回答、4 空格、先给方案”会被重复问 |
+| 项目隔离 + 显式全局偏好（推荐） | 默认精确，通用偏好仍可复用；用户能主动提升一条记忆为全局 | 多一个 scope 和提升入口；需要防止“全局”被滥用 |
+
+推荐第三种。规则固定为：
+
+1. `preference` 可以写入 `global`，但必须由用户明确说“这是全局偏好”或在管理面手动提升。
+2. `project_fact`、`decision`、`pitfall`、`command_recipe` 永远只写项目 scope，不自动跨项目。
+3. 召回时先项目记忆，再全局偏好；全局最多 2 条，且必须在注入块里标 `scope=global`。
+4. 删除项目时只删项目记忆，全局偏好不受影响；删除全局偏好要单独确认。
+
+这样既保留“记住用户习惯”的收益，又避免把 A 项目的 `mvn` 命令和端口带进 B 项目。
+
 单条记忆只存一句到三句话的结论，不存整段对话。示例：
 
 ```text
@@ -168,7 +188,7 @@ Prompt 里明确三件事：记忆可能过时、不能覆盖当前指令、不�
 
 ### 失败
 
-- `AGENT_MEMORY_ENABLED=false` 或 sidecar 不可达：`NoopMemoryService`，run 继续。
+- `AGENT_MEMORY_ENABLED=true` 或 sidecar 不可达：`NoopMemoryService`，run 继续。
 - 连续 3 次失败：打开熔断 60 秒，UI Runtime 行显示 `memory unavailable`。
 - 召回超时：不注入记忆，继续模型调用。
 - 写入超时：丢弃候选，不重试到下一轮。
@@ -219,7 +239,7 @@ Jade 侧增加：
 ### 配置
 
 ```env
-AGENT_MEMORY_ENABLED=false
+AGENT_MEMORY_ENABLED=true
 AGENT_MEMORY_PROVIDER=mem0-oss
 AGENT_MEMORY_URL=http://127.0.0.1:8888
 AGENT_MEMORY_API_KEY=
@@ -256,7 +276,50 @@ CLI `--memory-health`、Web Runtime 行、查看/删除/导出；集成测试；
 
 总计约 4.5 天，不含 provider 调试和博客。
 
-## 12. 验收标准
+## 12. 收益评估
+
+先给结论：**记忆对“同一仓库、反复迭代、长期协作”收益高；对一次性任务收益低，甚至为负。** 它节省的是重复解释和重复试错，代价是额外服务、延迟、隐私面和错误记忆的风险。
+
+### 12.1 预期收益
+
+1. **减少重复说明。** 用户偏好、项目结构、构建命令、测试入口不用每次重讲。以 10 次同仓库会话为样本，目标是重复说明类消息减少 20% 以上。
+2. **减少重复环境失败。** 端口冲突、沙箱限制、依赖缓存、工具链路径这类坑写入后，新会话可直接避开。目标是对应 `tool.end` 失败率下降。
+3. **保持跨会话决策。** 用户已经拍板的接口、目录、命名和约束，不会因为换会话被推翻；Goal review 也能拿到更完整的上下文。
+4. **缩短首个有效编辑的时间。** 不需要先花几轮读项目、问偏好；但这条必须用实际 session 计时验证，不能只靠感觉。
+
+### 12.2 成本与风险
+
+| 项 | 量级 | 说明 |
+|---|---|---|
+| 召回延迟 | 50–300ms/次 | 500ms 超时；失败不阻塞 |
+| 写入延迟 | 0（异步） | 2s 超时，失败丢弃 |
+| embedding/抽取成本 | 本地 CPU 或云调用 | FastEmbed 本地推理；云 profile 有 API 费用 |
+| prompt 开销 | 约 300–800 token/次 | 最多 5 条，短文本；需要通过 token 统计验证 |
+| 错误记忆 | 不可完全避免 | 需要分数阈值、项目 scope、来源标注、删除入口 |
+| 隐私面 | 增加一个本地数据存储 | 本地 profile 不出机；cloud profile 必须显式开启 |
+
+### 12.3 按场景判断
+
+| 场景 | 预期收益 | 建议 |
+|---|---|---|
+| 同一项目反复迭代 | 高 | 默认开启，项目隔离 |
+| 多项目、同一用户 | 中 | 项目隔离 + 少量全局偏好 |
+| 一次性脚本/一次性问答 | 低 | 可以关闭，避免额外链路 |
+| 多用户/团队共享 | 暂不支持 | 需要鉴权、租户隔离和审计后再做 |
+
+### 12.4 评估指标
+
+上线前先做 10 次同仓库会话的对照，记录：
+
+- 重复说明次数、用户纠正次数；
+- 从提交任务到第一次有效 `write_file` 的耗时；
+- `tool.end` 失败率、`MAX_STEPS`/`LOOP_DETECTED` 次数；
+- 召回 precision@5（人工抽查）、错误记忆率、过期记忆率；
+- 召回 p95 延迟、prompt token 增量、Mem0 不可用次数。
+
+建议门槛：召回 p95 < 500ms；precision@5 ≥ 70%；错误记忆率 < 5%；重复说明减少 ≥ 20%；失败率不上升。达不到就保留功能但默认关闭，先修写入策略，不靠“多写记忆”掩盖召回质量问题。
+
+## 13. 验收标准
 
 1. 关闭 memory 时，143 个测试全部通过，行为与当前一致。
 2. 开启 memory 后，新会话能召回上一会话写入的项目决策；召回 p95 < 500ms。
@@ -265,15 +328,15 @@ CLI `--memory-health`、Web Runtime 行、查看/删除/导出；集成测试；
 5. 两次相同写入不会产生重复记忆；一次 `infer=true` 的多条抽取有明确 id 可审计。
 6. 博客和设计文档中的架构图、生命周期图与实现一致。
 
-## 13. 待 review 的决策
+## 14. 已确认的决策
 
-1. 默认本地 OSS 还是默认关闭、由用户显式启动？（建议默认关闭）
-2. 本地 embedding 用 FastEmbed 的哪个模型？建议 `BAAI/bge-small-en-v1.5`，先测中英文混合效果。
-3. 写入策略是否采用“用户原话 infer=true、系统结论 infer=false”的混合？建议采用。
-4. 跨项目记忆是否默认隔离？（建议隔离，只有用户显式“全局偏好”才共享）
-5. 删除/导出先做 CLI 还是 Web？建议先 Web + API，CLI 只做 health。
+1. 默认开启；`AGENT_MEMORY_ENABLED=false` 可关闭。sidecar 不可达时回退 Noop。
+2. 本地 embedding 使用 `BAAI/bge-small-en-v1.5`；Phase 0 先测中英文混合、冷启动和内存占用。
+3. 写入采用“用户原话 infer=true、系统结论 infer=false”的混合策略。
+4. 跨项目采用“项目隔离 + 显式全局偏好”，项目事实/决策/踩坑不跨项目。
+5. 管理面做 Web + API；CLI 只做 health。
 
-## 14. 参考
+## 15. 参考
 
 - Mem0 OSS REST API：<https://docs.mem0.ai/open-source/features/rest-api>
 - Mem0 自托管：<https://docs.mem0.ai/open-source/setup>
