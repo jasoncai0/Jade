@@ -82,6 +82,8 @@
 
 | 2026-11-24 16:15 | 补充记忆准入、召回与汰换 | 文章 200，11 节与图 4 可见 | blog commit `a812d19`；备份 `/home/ubuntu/backups/blog-20261124-161344` |
 
+| 2026-11-24 16:34 | 补充记忆实现代码位置与示例 | 文章 200，11.5 节与 GitHub 链接可见 | blog commit `d804ec5`、baseline `c30f772`；备份 `/home/ubuntu/backups/blog-20261124-163417` |
+
 ## 待办
 
 - [x] 构建 Hugo 并发布 `coding-agent-pitfalls`。
