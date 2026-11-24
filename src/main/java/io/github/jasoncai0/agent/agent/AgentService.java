@@ -740,9 +740,23 @@ public final class AgentService implements AutoCloseable {
                     continue;
                 }
                 Workspace workspace = Workspace.open(directory);
+                RunSnapshot persisted = stored;
+                // A previous process may have died after the terminal event but
+                // before jade_sessions was updated. Prefer the durable terminal
+                // event/transcript from the workspace over the stale summary.
+                if (!stored.terminal()) {
+                    RunSnapshot recovered = RunArtifacts.load(workspace.root())
+                            .map(RunArtifacts.StoredRun::snapshot)
+                            .filter(RunSnapshot::terminal)
+                            .orElse(null);
+                    if (recovered != null) {
+                        stored = recovered;
+                    }
+                }
                 RunState state = RunState.restore(stored);
                 RunSnapshot normalized = state.snapshot();
-                if (!normalized.status().equals(stored.status())) {
+                if (!normalized.status().equals(persisted.status())
+                        || !java.util.Objects.equals(normalized.error(), persisted.error())) {
                     eventStore.saveSnapshot(normalized);
                 }
                 RunEventLog events = RunEventLog.restored(stored.id(), eventStore,

@@ -52,6 +52,7 @@
 | 21 | 2026-11-24 | Mem0 sidecar | 官方 `mem0/mem0-api-server:latest` 启动即报 `Neither 'psycopg' nor 'psycopg2' library is available` | 官方镜像默认配置依赖 pgvector + Neo4j + OpenAI，镜像本身不装 psycopg | 本地改为官方 API 代码 + Qdrant local + DeepSeek + OpenAI-compatible embedder；Dockerfile 在 `docker/mem0/` | Mem0 10.1 |
 | 22 | 2026-11-24 | BGE embedding | Mem0 0.1.117 配置 `fastembed` 报 `Unsupported embedding provider`；HF 模型下载卡在约 740 KB | 该版本 embedder factory 不含 fastembed；HuggingFace 直连/镜像不稳定 | 单独起 `jade-embed` FastEmbed 服务，Mem0 走 OpenAI-compatible `/v1/embeddings`；用 8 段 Range 下载 66,465,124 字节 ONNX 并离线加载 | Mem0 10.2 |
 | 23 | 2026-11-24 | Mem0 冷启动 | BGE 首次召回 656 ms，超过 Jade 500 ms 超时；预热后 310–414 ms | ONNX 首次加载/初始化成本 | sidecar 启动后先跑 warm-up query；或把首次超时单独放宽 | Mem0 10.3 |
+| 24 | 2026-11-24 | 会话状态 | 成功任务重启后显示 `FAILED`；`jade_sessions` 仍是 `QUEUED`/`RUNNING`，但事件里已有 `run.succeeded` | CLI 在 `run.succeeded` 后立即退出并关闭 executor；最终快照原本只在 `executeTurn` finally 写入，`run.finished` 事件本身不落 session 快照 | `RunEventLog.emit("run.finished")` 在事件可见前先写终态快照；CLI 等到 `run.finished` 再退出；启动时用工作区 terminal 事件修复 stale 行；`SUCCEEDED` 清空重启错误 | 会话 1.5 |
 
 ## 发布记录
 
@@ -75,6 +76,8 @@
 | 2026-11-24 01:12 | 补充 Mem0 sidecar 落地与端侧验收 | 文章 200，图 3 200 | blog commit `b06f927`；备份 `/home/ubuntu/backups/blog-20261124-011205` |
 
 | 2026-11-24 01:18 | 补充 BGE 最终 smoke 数据 | 文章 200 | blog commit `1018233`；备份 `/home/ubuntu/backups/blog-20261124-011836` |
+
+| 2026-11-24 13:33 | 补充成功会话误标失败的持久化顺序坑 | 文章 200，1.5 节可见 | blog commit `b86c707`；备份 `/home/ubuntu/backups/blog-20261124-133319` |
 
 ## 待办
 

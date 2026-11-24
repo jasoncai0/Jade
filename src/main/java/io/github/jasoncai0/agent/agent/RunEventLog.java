@@ -58,6 +58,20 @@ public final class RunEventLog {
         synchronized (this) {
             event = new AgentEvent(nextSeq++, System.currentTimeMillis(), type,
                     data == null ? Map.of() : Map.copyOf(data));
+            // Persist the terminal snapshot before the event becomes visible to
+            // clients. Headless runs may close the service immediately after
+            // observing the terminal event; waiting for executor cleanup would
+            // leave jade_sessions stuck at QUEUED/RUNNING.
+            if (store != null && runId != null && "run.finished".equals(type)) {
+                Object snapshot = event.data().get("snapshot");
+                if (snapshot instanceof RunSnapshot runSnapshot) {
+                    try {
+                        store.saveSnapshot(runSnapshot);
+                    } catch (RuntimeException ignored) {
+                        // The event is still persisted; restore can fall back to events.
+                    }
+                }
+            }
             events.add(event);
             if (store != null && runId != null) {
                 store.append(runId, event);

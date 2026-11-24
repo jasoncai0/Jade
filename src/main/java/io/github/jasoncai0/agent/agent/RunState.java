@@ -70,14 +70,25 @@ public final class RunState {
         state.usage = snapshot.usage() == null ? Usage.ZERO : snapshot.usage();
         state.finalAnswer = snapshot.finalAnswer();
         state.error = snapshot.error();
+        // Old rows could carry the restart message while already marked
+        // SUCCEEDED, or a QUEUED row could have been written just before the
+        // terminal snapshot. Normalize both cases.
+        if (RunStatus.SUCCEEDED.name().equals(state.status)) {
+            state.error = null;
+        }
         state.verification = snapshot.verification();
         state.finishedAt = snapshot.finishedAt();
         state.transcriptPath = snapshot.transcriptPath();
         state.parentRunId = snapshot.parentRunId();
         state.forkSeq = snapshot.forkSeq();
         if (!snapshot.terminal()) {
-            state.status = RunStatus.FAILED.name();
-            state.error = "Run was interrupted by a server restart";
+            if (snapshot.finalAnswer() != null && !snapshot.finalAnswer().isBlank()) {
+                state.status = RunStatus.SUCCEEDED.name();
+                state.error = null;
+            } else {
+                state.status = RunStatus.FAILED.name();
+                state.error = "Run was interrupted by a server restart";
+            }
             state.finishedAt = System.currentTimeMillis();
         }
         return state;
@@ -239,6 +250,7 @@ public final class RunState {
     public synchronized void succeed(String answer) {
         status = RunStatus.SUCCEEDED.name();
         finalAnswer = answer;
+        error = null;
         finishedAt = System.currentTimeMillis();
     }
 

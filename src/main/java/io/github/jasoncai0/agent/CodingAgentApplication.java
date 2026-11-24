@@ -276,10 +276,14 @@ public final class CodingAgentApplication {
             console.info("");
 
             long last = 0;
+            boolean finishedSeen = false;
             while (true) {
                 List<AgentEvent> events = run.events().after(last);
                 if (events.isEmpty()) {
-                    if (run.events().closed() || run.snapshot().terminal()) {
+                    // A terminal snapshot is set before run.finished is emitted.
+                    // Wait for the durable final event so the session snapshot is
+                    // not left at QUEUED/RUNNING when a headless CLI exits.
+                    if (run.events().closed() || finishedSeen) {
                         break;
                     }
                     AgentEvent next = run.events().awaitAfter(last, 1000);
@@ -295,6 +299,9 @@ public final class CodingAgentApplication {
                     }
                     if (event.type().equals("question.request")) {
                         resolveQuestion(service, run);
+                    }
+                    if (event.type().equals("run.finished")) {
+                        finishedSeen = true;
                     }
                     last = event.seq();
                 }
