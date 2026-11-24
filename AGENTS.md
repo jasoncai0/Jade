@@ -61,6 +61,7 @@ MySQL 用 `docker compose up -d`；数据库 `jade`，端口 `127.0.0.1:3307`。
 - `docs/PERMISSIONS.md`、`docs/SANDBOX.md`：权限与沙箱边界。
 - `docs/DSH-GAP-ANALYSIS.md`、`docs/superpowers/plans/2026-11-18-dsh-gap-closure.md`：差距与后续计划。
 - `docs/RETROSPECTIVE.md`：设计与踩坑复盘。
+- `docs/MEM0-LIFECYCLE.md`：记忆准入、召回、汰换现状与缺口。
 - `docs/MEM0-SIDECAR-REPORT.md`：Mem0 sidecar 实现与 BGE 端到端验收。
 - `docker/mem0/`：Mem0 OSS + FastEmbed BGE sidecar。
 - `docs/CODE-REVIEW-2026-11-18.md`：全量走查、P0/P1/P2 TODO。
