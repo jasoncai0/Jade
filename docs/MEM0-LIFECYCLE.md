@@ -5,7 +5,7 @@
 | 状态 | 当前实现 + 后续设计 |
 | 日期 | 2026-11-24 |
 | 实现 | `memory/`、`AgentLoop.maybeWriteMemory`、`/api/memory/*` |
-| 设计 | `docs/superpowers/specs/2026-11-23-mem0-memory-design.md` |
+| 设计 | `docs/superpowers/specs/2026-11-23-mem0-memory-design.md`（准入 v2 见 §16） |
 | 验收 | `docs/MEM0-SIDECAR-REPORT.md` |
 
 ## 1. 先给结论
