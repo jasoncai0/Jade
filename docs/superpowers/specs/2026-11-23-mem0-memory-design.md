@@ -681,12 +681,102 @@ memory.admission.pending
 
 ### 16.13 需要 review 的决定
 
-1. 候选窗口：本轮所有 user 消息，还是只取最后 2 条？建议所有，但限制总字符。
-2. 自动写入阈值：0.75 是否合适？建议先用 shadow 校准。
-3. assistant 的验证后结论是否允许自动写入？建议不允许，先 pending。
-4. `infer=true` 改为 `infer=false` 是否接受？建议接受，避免二次抽取漂移。
-5. 是否引入 pending inbox 的 UI？建议第一期只做 API + Memory 弹窗列表。
-6. 准入模型是否复用 `deepseek-chat`？建议先复用，按延迟/成本再换小模型。
+先把推荐值放前面，方便直接拍板。每一条都按“推荐 / 理由 / 不选它的代价”展开。
+
+| # | 决定 | 推荐 |
+|---|---|---|
+| 1 | 候选窗口 | 当前 turn 的全部 user 消息 + 显式 ask_user 回答，最多 4 条 / 6,000 字符 |
+| 2 | 自动写入阈值 | 先 shadow 校准；启用后 ≥ 0.85 自动写，0.60–0.85 待审，< 0.60 丢弃 |
+| 3 | assistant 验证后结论 | 不自动写；最多 pending，用户确认后才晋升 |
+| 4 | Mem0 抽取方式 | 混合准入路径使用 `infer=false`；旧 heuristic 路径暂时保留 `infer=true` |
+| 5 | pending inbox | 不新开页面；Memory 弹窗加 Active / Pending 两个 tab，API 先行 |
+| 6 | 准入模型 | 先复用 `deepseek-chat`，temperature 0，单次 ≤600 tokens，2s 超时 |
+
+#### 16.13.1 候选窗口：取当前 turn 全部 user 消息
+
+推荐：从当前 turn 的 `turn.started` 到成功结束，收集全部 user 消息，加上显式 `ask_user` 的回答；最多 4 条、总计 6,000 字符。不要取整个 session 的历史，也不要只看最后一条。
+
+理由：
+
+- 最后一条经常是“继续”“可以”“按这个做”，本身没有信息；真正的约束在更早的消息里。
+- 只取最后 2 条仍然是拍脑袋窗口；一个 turn 里用户可能先纠正、再补充、最后确认。
+- 取整个 session 会重复处理已写过的内容，并放大 token 和误判。
+
+实现上当前 `AgentLoop.maybeWriteMemory(userMessage, ...)` 只拿到最后一条，需要增加 `turnUserMessages`。`ask_user` 的回答在 tool result 里，不能直接当作用户原话；只作为辅助证据，自动写入仍要求 user message 原文。
+
+#### 16.13.2 阈值：先 shadow，再 0.85 / 0.60
+
+推荐：shadow 阶段不写，只记录判断；启用自动写入后，`confidence >= 0.85` 自动写，`0.60–0.85` 进待审，`< 0.60` 丢弃。第一周只自动写 `preference` 和 `project_fact`，`decision` / `pitfall` / `command_recipe` 全部 pending。
+
+理由：
+
+- LLM 的 confidence 不是校准过的概率；0.75 在第一批样本里很可能对应 60% 左右的真实精度。
+- 记忆错误的代价是不可见的：错误条目会进入后续每个 Prompt，用户很难定位来源。
+- 0.85 看起来保守，但配合 pending 队列，不会丢掉中等置信度的候选。
+
+shadow 至少收集 50 条人工标注，算每个分数段的 precision；如果 0.75 段 precision ≥ 90%，再把自动阈值降到 0.75。不要先上线再补标注。
+
+#### 16.13.3 assistant 结论：不自动写
+
+推荐：assistant 的最终答案、Goal review 结论、验证摘要最多进入 pending，不能自动写入。唯一例外是用户在紧随其后的消息里明确确认“记住这个结论”，此时证据来源仍是用户消息。
+
+理由：
+
+- `verification` 只证明命令执行过，不证明架构决策正确。
+- Goal review 检查“是否回答了原任务”，不检查“结论是否真实”。
+- 让模型总结自己的输出再写回记忆，会形成自我强化；错误会被下一次召回继续放大。
+
+代价是写入量变少。可以接受：`pitfall` 和 `decision` 先 pending，等用户确认；确认动作本身就是质量信号。
+
+#### 16.13.4 `infer=false`：混合路径接受
+
+推荐：混合准入通过 `emit_memory` 产出规范化 statement 后，以 `infer=false` 写入。旧 `MemoryPolicy` heuristic 路径暂时保留 `infer=true`，用配置隔离，迁移完成后再统一。
+
+理由：
+
+- `infer=true` 会让 Mem0 对同一段文本再抽取一次，可能改写成多条、丢证据、和 judge 的 kind/scope 不一致。
+- `infer=false` 下一条 statement 对应一条记忆，`source_run_id` / `evidence` 能稳定关联。
+- 去重和冲突由 Jade 的 `MemoryDeduper` 负责，不依赖 Mem0 的二次抽取。
+
+需要保证 statement 自包含：把“这个仓库”改写成“Jade 仓库”，不写“上面说的方案”；不把代码块、路径列表和密钥带进去。
+
+#### 16.13.5 pending inbox：Memory 弹窗两个 tab
+
+推荐：不新开独立页面。现有 Memory 弹窗增加 `Active` / `Pending` 两个 tab；API 增加：
+
+```text
+GET  /api/memory/pending
+POST /api/memory/pending/{id}/approve
+POST /api/memory/pending/{id}/reject
+```
+
+Pending 条目不参与 recall，不注入 prompt；approve 后才写 Mem0 或改为 active。第一期 API 可以先于 UI 落地，UI 放在 Phase 3。
+
+理由：
+
+- 现有 Memory 弹窗已经有 list/export/delete，扩展成本最低。
+- 独立 inbox 需要新路由、空状态、计数和移动端布局；当前收益不足以先做。
+- Pending 必须与 active 视觉区分，且显示 confidence、kind、evidence、创建 run。
+
+#### 16.13.6 模型：先复用 deepseek-chat
+
+推荐：复用现有 `LlmClient` / `deepseek-chat`，temperature 0，`max_tokens=600`，2s 超时，一次成功 turn 一次调用；prompt 只放当前 turn 用户消息、最终答案、验证摘要，输入上限 6,000 字符。
+
+理由：
+
+- 不引入新 provider、密钥和部署依赖；现有 strict tool / JSON mode 已有测试基础。
+- 准入调用在 run 成功后异步执行，不增加首 token 延迟；每次几百到两千 token，成本可控。
+- 先用同一模型建立 baseline；等有 100 次真实调用和 p95 延迟数据，再评估更小模型或本地模型。
+
+不推荐一开始换小模型：准入判断需要否定、条件、证据强度的语义，模型太小会把“以后再说”判成偏好。也不推荐 `deepseek-reasoner`：延迟高，准入不需要长链推理。
+
+#### 16.13.7 建议的拍板顺序
+
+1. 先确认候选窗口和 `infer=false`，这两项决定数据形态。
+2. 再确认 assistant 结论边界和 pending UI，这两项决定产品交互。
+3. 最后用 shadow 数据校准阈值和模型；阈值不是拍脑袋定终值。
+
+如果只愿意先做最小版本：选 1、3、4，先 shadow 记录，不写、不做 UI；等 50 条样本后再决定 2、5、6。
 
 ### 16.14 不做什么
 
