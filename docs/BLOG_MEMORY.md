@@ -84,6 +84,8 @@
 
 | 2026-11-24 16:34 | 补充记忆实现代码位置与示例 | 文章 200，11.5 节与 GitHub 链接可见 | blog commit `d804ec5`、baseline `c30f772`；备份 `/home/ubuntu/backups/blog-20261124-163417` |
 
+| 2026-11-24 16:37 | 标注偏好/项目约定的精确命中行号 | 11.1 节可见 7 个 GitHub 行链接 | blog commit `9ca5f23`；备份 `/home/ubuntu/backups/blog-20261124-163704` |
+
 ## 待办
 
 - [x] 构建 Hugo 并发布 `coding-agent-pitfalls`。

@@ -286,6 +286,18 @@ private void maybeWriteMemory(String userMessage, Workspace workspace,
 
 ### 6.2 候选闸门：只认用户原话
 
+命中判定在 `MemoryPolicy.java:50-57`，不是模型判断，也不是 Mem0 判断：
+
+| 判定 | 代码位置 | 规则 |
+|---|---|---|
+| 长度/敏感词前置拦截 | `MemoryPolicy.java:46-48`、`:103-106` | 少于 8 字或含 `sk-`、密码、token、私钥头直接丢弃 |
+| 偏好命中 | `MemoryPolicy.java:50-51` | 包含“以后 / 默认 / 偏好 / always / prefer / default”等词 |
+| 项目约定命中 | `MemoryPolicy.java:52-53` | 包含“这个项目 / 本仓库 / 我们的约定 / 决策 / using / we use”等词 |
+| 两者都没命中 | `MemoryPolicy.java:54-56` | 返回 `Optional.empty()`，不写 Mem0 |
+| 提升为全局 | `MemoryPolicy.java:57` | 仅偏好且明确说“全局 / 所有项目 / 跨项目” |
+| 生成候选 | `MemoryPolicy.java:61-69` | kind=`preference` 或 `project_fact`，confidence 0.8/0.65，`infer=true` |
+| 底层包含判断 | `MemoryPolicy.java:126-130` | `String.contains`，大小写不敏感；不做语义相似度 |
+
 ```java
 // MemoryPolicy.java:44
 if (text.length() < 8 || isSensitive(text)) {
