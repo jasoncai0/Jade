@@ -284,7 +284,7 @@ public final class TeamToolset {
         @Override
         public ToolSpec spec() {
             return new ToolSpec("wait_agent",
-                    "Wait until selected teammates are idle and their message queues are empty. Empty targets waits for all. A timeout is an observation window, not a task failure; returns stillRunning/queued/completed/failed.",
+                    "Wait until selected teammates are idle and their message queues are empty, or return early when a child is waiting for approval. Empty targets waits for all. A timeout is an observation window, not a task failure; returns waitingApproval/stillRunning/queued/completed/failed.",
                     Schemas.object(Schemas.properties(
                             "targets", Schemas.array("Member names/ids.", Schemas.string("Member.")),
                             "timeoutSeconds", Schemas.integer("Timeout in seconds.", 1, 1800)
@@ -300,15 +300,24 @@ public final class TeamToolset {
             List<Map<String, Object>> members = (List<Map<String, Object>>) result.get("members");
             boolean timedOut = Boolean.TRUE.equals(result.get("timedOut"));
             long waitedSeconds = Math.max(0, ((Number) result.getOrDefault("waitedMillis", 0L)).longValue() / 1000);
-            StringBuilder out = new StringBuilder(timedOut
-                    ? "Timed out after " + waitedSeconds + "s while some members were still active. This is an observation timeout, not a task failure."
-                    : "All selected members are idle.");
+            @SuppressWarnings("unchecked")
+            List<String> waiting = (List<String>) result.getOrDefault("waitingApproval", List.of());
+            StringBuilder out = new StringBuilder(!waiting.isEmpty()
+                    ? "Waiting for Lead approval: " + String.join(", ", waiting)
+                            + ". This is not a task failure; approve in the Team dialog/API, then wait again."
+                    : timedOut
+                            ? "Timed out after " + waitedSeconds + "s while some members were still active. This is an observation timeout, not a task failure."
+                            : "All selected members are idle.");
+            appendGroup(out, "Waiting for approval", result.get("waitingApproval"));
             appendGroup(out, "Still running", result.get("stillRunning"));
             appendGroup(out, "Queued", result.get("queued"));
             appendGroup(out, "Completed", result.get("completed"));
             appendGroup(out, "Failed", result.get("failed"));
             appendGroup(out, "Idle (no result)", result.get("idle"));
-            if (timedOut) {
+            if (!waiting.isEmpty()) {
+                out.append("\nApprove pending child permission requests in the Team dialog/API; ")
+                        .append("do not reassign or spawn a duplicate for these members.");
+            } else if (timedOut) {
                 out.append("\nDo not reassign or spawn a duplicate for still-running/queued members. ")
                         .append("Inspect list_agents and the task board, then send_message or wait again.");
             }
@@ -326,6 +335,8 @@ public final class TeamToolset {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("timedOut", timedOut);
             data.put("waitedMillis", result.get("waitedMillis"));
+            data.put("waitingApproval", result.get("waitingApproval"));
+            data.put("pendingPermissions", result.get("pendingPermissions"));
             data.put("stillRunning", result.get("stillRunning"));
             data.put("queued", result.get("queued"));
             data.put("completed", result.get("completed"));

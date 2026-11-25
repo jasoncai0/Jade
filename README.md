@@ -508,7 +508,9 @@ wake a teammate; messages do. The `Team` dialog is a read-only board with
 members, task state, pending child approvals, and the enable toggle.
 `wait_agent` has an observation-only timeout (default 600s, max 1800s): it does
 not cancel or reassign work, and its result separates still-running/queued
-members from completed/failed ones.
+members from completed/failed ones. It returns early when a teammate has a
+pending permission request, so the Lead can surface the request instead of
+waiting for the 300s approval timeout.
 
 Team children share the workspace and are intentionally hidden from the
 top-level session rail. Members are runtime-only: after a server restart, the
@@ -662,7 +664,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 162 tests:
+The suite has 163 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling

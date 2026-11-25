@@ -105,8 +105,9 @@ public final class TeamService implements AutoCloseable {
                     list_agents/send_message/wait_agent to coordinate. Only the Lead may reassign tasks or approve
                     teammate permission requests in the UI. Task changes do not wake agents; messages do.
                     wait_agent timeout only means its observation window expired: still_running/queued members are
-                    not failures. Do not reassign or spawn duplicates; inspect list_agents and the task board, then
-                    send_message or wait again. Keep final verification in this Lead session.
+                    not failures. If wait_agent returns waiting_approval, ask the user to approve the child request
+                    in the Team dialog/API; do not reassign or spawn duplicates. Inspect list_agents and the task
+                    board, then send_message or wait again. Keep final verification in this Lead session.
                     """;
         }
         return """
@@ -257,15 +258,23 @@ public final class TeamService implements AutoCloseable {
         long started = System.currentTimeMillis();
         long deadline = started + Math.max(1, timeoutMillis);
         boolean idle = members.isEmpty();
+        boolean waitingApproval = false;
         while (!idle && System.currentTimeMillis() < deadline) {
             idle = true;
+            waitingApproval = false;
             for (TeamMember member : members) {
-                if (member.running() || !member.inbox().isEmpty()) {
+                if (member.run().permissions().pendingFor(member.id()) != null) {
+                    waitingApproval = true;
+                    idle = false;
+                    break;
+                }
+                RunStatus status = RunStatus.valueOf(member.run().state().snapshot().status());
+                if (member.running() || !member.inbox().isEmpty() || status == RunStatus.QUEUED) {
                     idle = false;
                     break;
                 }
             }
-            if (idle) break;
+            if (idle || waitingApproval) break;
             try {
                 Thread.sleep(50);
             } catch (InterruptedException e) {
@@ -273,9 +282,10 @@ public final class TeamService implements AutoCloseable {
                 break;
             }
         }
-        boolean timedOut = !idle;
+        boolean timedOut = !idle && !waitingApproval;
         List<String> stillRunning = new ArrayList<>();
         List<String> queued = new ArrayList<>();
+        List<String> waitingApprovals = new ArrayList<>();
         List<String> completed = new ArrayList<>();
         List<String> failed = new ArrayList<>();
         List<String> idleMembers = new ArrayList<>();
@@ -283,6 +293,7 @@ public final class TeamService implements AutoCloseable {
             switch (outcome(member)) {
                 case "running" -> stillRunning.add(member.name());
                 case "queued" -> queued.add(member.name());
+                case "waiting_approval" -> waitingApprovals.add(member.name());
                 case "completed" -> completed.add(member.name());
                 case "failed" -> failed.add(member.name());
                 default -> idleMembers.add(member.name());
@@ -291,6 +302,8 @@ public final class TeamService implements AutoCloseable {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("timedOut", timedOut);
         result.put("waitedMillis", System.currentTimeMillis() - started);
+        result.put("waitingApproval", waitingApprovals);
+        result.put("pendingPermissions", pendingPermissions(root));
         result.put("stillRunning", stillRunning);
         result.put("queued", queued);
         result.put("completed", completed);
@@ -462,6 +475,9 @@ public final class TeamService implements AutoCloseable {
     }
 
     private String outcome(TeamMember member) {
+        if (member.run().permissions().pendingFor(member.id()) != null) {
+            return "waiting_approval";
+        }
         if (member.running()) {
             return "running";
         }

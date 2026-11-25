@@ -555,7 +555,8 @@ verification.
 The board is exposed at `GET /api/runs/{id}/team`, with task and permission
 sub-routes.
 
-`wait_agent` is an observation-only wait. On timeout it returns active
+`wait_agent` is an observation-only wait. It returns early when a teammate
+has a pending permission request, and on timeout it returns active
 (`stillRunning`/`queued`) and idle (`completed`/`failed`/`idle`) member groups;
 it does not cancel child runs or mutate task ownership. The Team policy tells
 the Lead not to reassign or spawn duplicates for active members. The UI is intentionally read-only, like the reference
