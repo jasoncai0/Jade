@@ -74,6 +74,7 @@ const state = {
   pendingQuestion: null,
   traceOrder: 'asc',
   view: 'session',
+  newTeamEnabled: false,
   oldestSeq: 0,
   hasEarlier: false,
   eventTotal: 0,
@@ -117,6 +118,16 @@ function statusClass(status) {
 
 function isTerminal(status) {
   return TERMINAL.has(normalizeStatus(status));
+}
+
+function syncTeamStartToggle() {
+  const wrap = $('teamStartWrap');
+  const toggle = $('teamStartToggle');
+  if (!wrap || !toggle) return;
+  const isNew = !state.selectedId;
+  wrap.classList.toggle('hidden', !isNew);
+  toggle.checked = isNew && state.newTeamEnabled;
+  toggle.disabled = state.starting;
 }
 
 function syncStartButton() {
@@ -272,6 +283,7 @@ function showEmpty() {
   state.currentStep = 0;
   state.usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   setView('session');
+  syncTeamStartToggle();
   clearTimeline();
   state.loadedEvents = 0;
   state.hasEarlier = false;
@@ -339,6 +351,7 @@ async function selectRun(id) {
   state.pendingPermission = null;
   hidePermissionCard();
   setView('session');
+  syncTeamStartToggle();
   clearTimeline();
   renderPlan([]);
   renderFiles([]);
@@ -347,6 +360,7 @@ async function selectRun(id) {
   $('artifactLine').classList.add('hidden');
   $('emptyState').classList.add('hidden');
   $('runView').classList.remove('hidden');
+  syncTeamStartToggle();
   $('runStatus').className = 'status-badge';
   $('runStatusText').textContent = 'loading';
   $('runTask').textContent = 'Loading run…';
@@ -1677,7 +1691,7 @@ async function startRun() {
         })
       : await api('/api/runs', {
           method: 'POST',
-          body: JSON.stringify({ task })
+          body: JSON.stringify({ task, team: state.newTeamEnabled })
         });
     const snapshot = result.run;
     state.runs = [snapshot, ...state.runs.filter((run) => run.id !== snapshot.id)];
@@ -1703,6 +1717,7 @@ async function startRun() {
   } finally {
     state.starting = false;
     syncStartButton();
+    syncTeamStartToggle();
   }
 }
 
@@ -1711,6 +1726,7 @@ function newRun() {
   stopTimer();
   state.selectedId = null;
   state.selectionToken += 1;
+  state.newTeamEnabled = false;
   showEmpty();
   renderRunList();
   $('taskInput').focus();
@@ -2155,6 +2171,10 @@ function wireEvents() {
   $('toolsBtn').addEventListener('click', showTools);
   $('memoryBtn').addEventListener('click', showMemory);
   $('teamBtn').addEventListener('click', showTeam);
+  $('teamStartToggle').addEventListener('change', (event) => {
+    state.newTeamEnabled = event.target.checked;
+    syncStartButton();
+  });
   $('modalClose').addEventListener('click', closeModal);
   $('modalBackdrop').addEventListener('click', (event) => {
     if (event.target === $('modalBackdrop')) closeModal();

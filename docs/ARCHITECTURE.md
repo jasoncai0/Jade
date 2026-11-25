@@ -538,8 +538,10 @@ preferences and are capped during selection. `AGENT_MEMORY_MODE` supports `on`,
 
 Team mode is session-scoped: a root run owns an enabled flag and a MySQL-backed
 task board, and can spawn writable teammates that share its workspace. It is
-off by default (`AGENT_TEAM_ENABLED=false`); the Team dialog or
-`POST /api/runs/{id}/team` toggles it. A teammate is a normal `AgentRun` with
+off by default (`AGENT_TEAM_ENABLED=false`); a new run can enable it before
+the first turn with the composer checkbox or `POST /api/runs {"team":true}`,
+and an existing run can use the Team dialog or
+`POST /api/runs/{id}/team`. A teammate is a normal `AgentRun` with
 the `team-` prefix, its own event log and permission broker, and a persistent
 same-session loop. It is not a one-shot read-only subagent.
 

@@ -283,7 +283,7 @@ class WebServerTest {
                 root, skills, root.resolve("runs"),
                 new LlmSettings("sk-test", "http://127.0.0.1:1", "fake", 5, 1024),
                 new AgentSettings(3, 3, 20_000, 30, false, PermissionMode.BYPASS),
-                new ServerSettings("127.0.0.1", 0), null, null, true
+                new ServerSettings("127.0.0.1", 0), null, null, false
         );
         ScriptedLlm llm = new ScriptedLlm();
         llm.script.add(new ChatResult("done", null, List.of(), "stop", Usage.ZERO));
@@ -292,7 +292,7 @@ class WebServerTest {
         try {
             server.start();
             String base = server.url();
-            HttpResponse<String> created = post(base + "/api/runs", "{\"task\":\"team\"}");
+            HttpResponse<String> created = post(base + "/api/runs", "{\"task\":\"team\",\"team\":true}");
             assertEquals(202, created.statusCode());
             String runId = JSON.readTree(created.body()).path("data").path("run").path("id").asText();
             service.await(runId, Duration.ofSeconds(5));

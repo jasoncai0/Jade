@@ -129,6 +129,13 @@ public final class AgentService implements AutoCloseable {
      * path segment under agent-workspaces; omit it to generate a unique one.
      */
     public RunSnapshot start(String task, String workspaceName) {
+        return start(task, workspaceName, false);
+    }
+
+    /**
+     * Starts a run and optionally enables Team mode before the first model turn.
+     */
+    public RunSnapshot start(String task, String workspaceName, boolean teamEnabled) {
         if (closed) {
             throw new IllegalStateException("Agent service is shutting down");
         }
@@ -172,6 +179,9 @@ public final class AgentService implements AutoCloseable {
         }
         runs.put(id, run);
         team.ensureRoot(id);
+        if (teamEnabled) {
+            team.setEnabled(run, true);
+        }
         state.setFiles(workspace.listFiles(500, 8));
         if (eventStore != null) {
             eventStore.saveSnapshot(state.snapshot());

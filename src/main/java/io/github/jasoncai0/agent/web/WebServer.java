@@ -358,8 +358,9 @@ public final class WebServer implements AutoCloseable {
         }
         String task = body.path("task").asText(null);
         String workspace = body.path("workspace").asText(null);
+        boolean teamEnabled = body.path("team").asBoolean(false);
         try {
-            RunSnapshot snapshot = agentService.start(task, workspace);
+            RunSnapshot snapshot = agentService.start(task, workspace, teamEnabled);
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("run", snapshot);
             data.put("eventsUrl", "/api/runs/" + snapshot.id() + "/events");

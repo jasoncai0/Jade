@@ -489,10 +489,19 @@ The Memory dialog lists, exports, and deletes memories. `GET /api/memory` and
 ## Team and TeamBoard
 
 Team mode turns a root session into a small agent team. It is **off by
-default** and is enabled per session from the Team dialog or
-`POST /api/runs/{id}/team`. Teammates share the root workspace, run in the
-background, and have write/compile/run tools; the Lead keeps final
-verification and approves child permission requests.
+default**. For a new session, check **Team mode** in the composer before
+starting; the run is created with the board enabled. An existing session can
+also be toggled from the Team dialog or `POST /api/runs/{id}/team`. The create
+API accepts the same intent:
+
+```http
+POST /api/runs
+{"task":"...", "team":true}
+```
+
+Teammates share the root workspace, run in the background, and have
+write/compile/run tools; the Lead keeps final verification and approves child
+permission requests.
 
 ```bash
 AGENT_TEAM_ENABLED=false   # default for new root sessions; toggle per session

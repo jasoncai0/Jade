@@ -221,6 +221,7 @@ WHERE root_run_id = #{rootRunId}
 ### 8.2 HTTP
 
 ```text
+POST /api/runs                               {task, team:true}   # enable at creation
 GET  /api/runs/{id}/team
 POST /api/runs/{id}/team                    {enabled:true|false}
 GET  /api/runs/{id}/team/tasks/{taskId}
@@ -234,7 +235,8 @@ POST /api/runs/{id}/team/permissions/{requestId}
 
 Team drawer 是只读 board，不做拖拽：
 
-- enable/disable toggle；
+- 新会话：composer 里的 **Team mode** 复选框，创建时直接带 board（默认不勾选）；
+- 已有会话：Team drawer 的 enable/disable toggle；
 - members：running/idle、currentTask、lastResult、lastError；
 - tasks：id/revision/status/owner/subject/description；
 - pending child permissions：Deny / Allow once / Allow for session。

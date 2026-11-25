@@ -2415,3 +2415,17 @@ body {
 .team-empty { color: var(--muted); font-size: 12px; margin: 0; }
 .team-permission { border: 1px solid var(--amber); padding: 12px; margin-bottom: 8px; }
 .team-permission .modal-actions { margin-top: 10px; }
+
+/* New-session Team toggle */
+.composer-team {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 11px;
+  user-select: none;
+  cursor: pointer;
+}
+.composer-team input { accent-color: var(--accent); width: 13px; height: 13px; }
+.composer-team.hidden { display: none; }
