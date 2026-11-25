@@ -506,6 +506,9 @@ team tools are registered only while team mode is on:
 `team_spawn`, `list_agents`, `send_message`, `wait_agent`. Task changes do not
 wake a teammate; messages do. The `Team` dialog is a read-only board with
 members, task state, pending child approvals, and the enable toggle.
+`wait_agent` has an observation-only timeout (default 600s, max 1800s): it does
+not cancel or reassign work, and its result separates still-running/queued
+members from completed/failed ones.
 
 Team children share the workspace and are intentionally hidden from the
 top-level session rail. Members are runtime-only: after a server restart, the
@@ -659,7 +662,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 161 tests:
+The suite has 162 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling

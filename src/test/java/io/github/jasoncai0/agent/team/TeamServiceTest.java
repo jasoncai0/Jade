@@ -17,12 +17,69 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class TeamServiceTest {
     @TempDir
     Path temp;
+
+    @Test
+    void waitTimeoutSeparatesRunningMembersFromCompletedOnes() throws Exception {
+        Path skills = Files.createDirectories(temp.resolve("skills"));
+        Path workspaces = Files.createDirectories(temp.resolve("workspaces"));
+        AgentSettings settings = new AgentSettings(4, 4, 20_000, 10, false,
+                PermissionMode.BYPASS, 0, false, 0, true, false);
+        AppConfig config = new AppConfig(temp, skills, workspaces,
+                new LlmSettings("sk-test", "http://127.0.0.1:1", "fake", 5, 1024),
+                settings, new ServerSettings("127.0.0.1", 0), null, null, true);
+        AtomicBoolean hold = new AtomicBoolean(false);
+        CountDownLatch release = new CountDownLatch(1);
+        LlmClient llm = request -> {
+            if (hold.get()) {
+                try {
+                    if (!release.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("test latch timed out");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("interrupted", e);
+                }
+            }
+            return new ChatResult("done", null, List.of(), "stop", Usage.ZERO);
+        };
+        try (AgentService service = new AgentService(config, llm)) {
+            var rootSnapshot = service.start("root task", "team-timeout-test");
+            assertNotNull(service.await(rootSnapshot.id(), Duration.ofSeconds(5)));
+            AgentRun root = service.require(rootSnapshot.id());
+            TeamService team = service.team();
+            hold.set(true);
+            try {
+                TeamMember member = team.spawn(root, "slow", "slow task");
+                var waiting = team.waitFor(root, List.of("slow"), 150);
+                assertTrue(Boolean.TRUE.equals(waiting.get("timedOut")), String.valueOf(waiting));
+                @SuppressWarnings("unchecked")
+                List<String> still = (List<String>) waiting.get("stillRunning");
+                @SuppressWarnings("unchecked")
+                List<String> queued = (List<String>) waiting.get("queued");
+                assertTrue(still.contains("slow") || queued.contains("slow"), String.valueOf(waiting));
+                @SuppressWarnings("unchecked")
+                List<String> completed = (List<String>) waiting.get("completed");
+                assertTrue(completed.isEmpty(), String.valueOf(waiting));
+            } finally {
+                hold.set(false);
+                release.countDown();
+            }
+            var done = team.waitFor(root, List.of("slow"), 10_000);
+            assertFalse(Boolean.TRUE.equals(done.get("timedOut")), String.valueOf(done));
+            @SuppressWarnings("unchecked")
+            List<String> completed = (List<String>) done.get("completed");
+            assertTrue(completed.contains("slow"), String.valueOf(done));
+        }
+    }
 
     @Test
     void spawnsWritableMemberAndWaitsForIt() throws Exception {

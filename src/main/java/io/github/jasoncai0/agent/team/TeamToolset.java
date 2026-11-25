@@ -284,7 +284,7 @@ public final class TeamToolset {
         @Override
         public ToolSpec spec() {
             return new ToolSpec("wait_agent",
-                    "Wait until selected teammates are idle and their message queues are empty. Empty targets waits for all.",
+                    "Wait until selected teammates are idle and their message queues are empty. Empty targets waits for all. A timeout is an observation window, not a task failure; returns stillRunning/queued/completed/failed.",
                     Schemas.object(Schemas.properties(
                             "targets", Schemas.array("Member names/ids.", Schemas.string("Member.")),
                             "timeoutSeconds", Schemas.integer("Timeout in seconds.", 1, 1800)
@@ -298,9 +298,23 @@ public final class TeamToolset {
             Map<String, Object> result = team.waitFor(actor, targets, timeout * 1000L);
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> members = (List<Map<String, Object>>) result.get("members");
-            StringBuilder out = new StringBuilder(Boolean.TRUE.equals(result.get("timedOut")) ? "Timed out." : "All idle.");
+            boolean timedOut = Boolean.TRUE.equals(result.get("timedOut"));
+            long waitedSeconds = Math.max(0, ((Number) result.getOrDefault("waitedMillis", 0L)).longValue() / 1000);
+            StringBuilder out = new StringBuilder(timedOut
+                    ? "Timed out after " + waitedSeconds + "s while some members were still active. This is an observation timeout, not a task failure."
+                    : "All selected members are idle.");
+            appendGroup(out, "Still running", result.get("stillRunning"));
+            appendGroup(out, "Queued", result.get("queued"));
+            appendGroup(out, "Completed", result.get("completed"));
+            appendGroup(out, "Failed", result.get("failed"));
+            appendGroup(out, "Idle (no result)", result.get("idle"));
+            if (timedOut) {
+                out.append("\nDo not reassign or spawn a duplicate for still-running/queued members. ")
+                        .append("Inspect list_agents and the task board, then send_message or wait again.");
+            }
             for (Map<String, Object> member : members) {
-                out.append("\n- ").append(member.get("name")).append(": ")
+                out.append("\n- ").append(member.get("name")).append(" [")
+                        .append(member.get("lastOutcome")).append("]: ")
                         .append(member.get("lastResult") == null || String.valueOf(member.get("lastResult")).isBlank()
                                 ? "(no result)" : member.get("lastResult"));
                 if (member.get("lastError") != null) out.append(" ERROR ").append(member.get("lastError"));
@@ -309,7 +323,25 @@ public final class TeamToolset {
                 out.append("\nMessages to Lead:");
                 for (Object message : messages) out.append("\n- ").append(message);
             }
-            return ToolResult.ok(out.toString(), Map.of("timedOut", result.get("timedOut"), "count", members.size()));
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("timedOut", timedOut);
+            data.put("waitedMillis", result.get("waitedMillis"));
+            data.put("stillRunning", result.get("stillRunning"));
+            data.put("queued", result.get("queued"));
+            data.put("completed", result.get("completed"));
+            data.put("failed", result.get("failed"));
+            data.put("idle", result.get("idle"));
+            data.put("count", members.size());
+            return ToolResult.ok(out.toString(), data);
+        }
+
+        private static void appendGroup(StringBuilder out, String label, Object value) {
+            if (!(value instanceof List<?> list) || list.isEmpty()) return;
+            out.append("\n").append(label).append(": ");
+            for (int i = 0; i < list.size(); i++) {
+                if (i > 0) out.append(", ");
+                out.append(list.get(i));
+            }
         }
     }
 }

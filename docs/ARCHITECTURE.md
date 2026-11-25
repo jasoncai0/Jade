@@ -553,7 +553,12 @@ Teammates get write/compile/run tools; the Lead remains responsible for final
 verification.
 
 The board is exposed at `GET /api/runs/{id}/team`, with task and permission
-sub-routes. The UI is intentionally read-only, like the reference
+sub-routes.
+
+`wait_agent` is an observation-only wait. On timeout it returns active
+(`stillRunning`/`queued`) and idle (`completed`/`failed`/`idle`) member groups;
+it does not cancel child runs or mutate task ownership. The Team policy tells
+the Lead not to reassign or spawn duplicates for active members. The UI is intentionally read-only, like the reference
 implementation: the Lead creates tasks through tools, and the dialog displays
 members, task state, and pending child approvals. A child's permission request
 is resolved through the Lead's Team dialog; scope `session` applies to that

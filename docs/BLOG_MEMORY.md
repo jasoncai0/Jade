@@ -53,6 +53,7 @@
 | 22 | 2026-11-24 | BGE embedding | Mem0 0.1.117 配置 `fastembed` 报 `Unsupported embedding provider`；HF 模型下载卡在约 740 KB | 该版本 embedder factory 不含 fastembed；HuggingFace 直连/镜像不稳定 | 单独起 `jade-embed` FastEmbed 服务，Mem0 走 OpenAI-compatible `/v1/embeddings`；用 8 段 Range 下载 66,465,124 字节 ONNX 并离线加载 | Mem0 10.2 |
 | 23 | 2026-11-24 | Mem0 冷启动 | BGE 首次召回 656 ms，超过 Jade 500 ms 超时；预热后 310–414 ms | ONNX 首次加载/初始化成本 | sidecar 启动后先跑 warm-up query；或把首次超时单独放宽 | Mem0 10.3 |
 | 24 | 2026-11-24 | 会话状态 | 成功任务重启后显示 `FAILED`；`jade_sessions` 仍是 `QUEUED`/`RUNNING`，但事件里已有 `run.succeeded` | CLI 在 `run.succeeded` 后立即退出并关闭 executor；最终快照原本只在 `executeTurn` finally 写入，`run.finished` 事件本身不落 session 快照 | `RunEventLog.emit("run.finished")` 在事件可见前先写终态快照；CLI 等到 `run.finished` 再退出；启动时用工作区 terminal 事件修复 stale 行；`SUCCEEDED` 清空重启错误 | 会话 1.5 |
+| 26 | 2026-11-26 | Team wait 超时误判 | `wait_agent` 超时输出只有 `Timed out.`，Lead 可能误判成员卡死并重复 spawn/reassign | 观察窗口结束 ≠ 成员失败；返回结果没有区分 running/queued/completed/failed | 返回 `timedOut`、`waitedMillis` 和四组状态；超时输出明确禁止对活跃成员重派；Team policy 同步说明；新增阻塞成员测试 | Team 8.4 |
 | 25 | 2026-11-24 | 记忆生命周期 | 长期记忆没有 TTL/时间衰减/supersede；旧偏好和新偏好可能同时召回 | 当前只做成功 run + 用户明确信号的准入，汰换只有手动删除；设计中的 expires_at/status/feedback 未实现 | 文档明确区分已实现与建议；推荐按 kind 设 TTL、last_verified、supersedes、过期先排除召回；补图 4 | Mem0 11 |
 
 ## 发布记录
@@ -85,6 +86,7 @@
 | 2026-11-24 16:34 | 补充记忆实现代码位置与示例 | 文章 200，11.5 节与 GitHub 链接可见 | blog commit `d804ec5`、baseline `c30f772`；备份 `/home/ubuntu/backups/blog-20261124-163417` |
 
 | 2026-11-24 16:37 | 标注偏好/项目约定的精确命中行号 | 11.1 节可见 7 个 GitHub 行链接 | blog commit `9ca5f23`；备份 `/home/ubuntu/backups/blog-20261124-163704` |
+| 2026-11-26 01:13 | 补充 Team wait_agent 超时语义 | 文章 200，8.4 节可见 | blog commit `039fa9d`；备份 `/home/ubuntu/backups/blog-20261126-011333` |
 
 ## 待办
 

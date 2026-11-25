@@ -1,6 +1,6 @@
 # Jade Agent Team / TeamBoard 实现
 
-> 状态：已实现（2026-11-26，Jade 1.4.0，161 tests）。
+> 状态：已实现（2026-11-26，Jade 1.4.0，162 tests）。
 > 提交：`b9fb752 feat: 实现 Team/TeamBoard 团队任务分派`。
 > 设计背景和 DSH 对照见 `docs/superpowers/specs/2026-11-25-agent-team-design.md`。
 
@@ -202,9 +202,20 @@ WHERE root_run_id = #{rootRunId}
 | `team_spawn` | 创建可写 teammate，队列初始任务 |
 | `list_agents` | 成员状态、当前任务、最后结果/错误 |
 | `send_message` | 给 Lead 或其他 teammate 排队消息 |
-| `wait_agent` | 等 idle + inbox 空，返回结果 |
+| `wait_agent` | 等 idle + inbox 空；超时只结束观察，返回 stillRunning/queued/completed/failed |
 
 任务工具自动放行；spawn/send/wait 也是协调元数据，不直接写文件。真正的文件/命令权限仍由 child broker 审批。
+
+#### wait_agent 超时语义
+
+`wait_agent` 默认等 600 秒，可传 `timeoutSeconds` 1–1800。超时只是**观察窗口结束**：
+
+- 不取消 teammate 的 `AgentRun`，不改任务状态/owner，不自动 reassign 或 spawn 替代成员；
+- 返回 `timedOut`、`waitedMillis`，并把成员分成 `stillRunning`、`queued`、`completed`、`failed`、`idle`；
+- 输出明确提示：仍在运行的成员不是失败，不要为它们重新分派或创建重复成员；先 `list_agents` + 任务板，再 `send_message` 或再次 `wait_agent`；
+- `wait_agent` 只判断成员 idle/inbox，不判断任务 completed；Lead 必须同时看任务板。
+
+因此长任务可以继续跑；真正需要处理的是 Lead 的等待策略，不是运行时的任务取消。
 
 ### 8.2 HTTP
 
@@ -363,7 +374,7 @@ Wait for the worker's message and report its result.
 - worker：`child-done`，`send_message` 把 `worker-done` 送回 Lead；
 - writer：`write_file` 触发 `perm-8a5bf30b`，Lead 在 Team drawer allow once，child 回复 `child-wrote`；
 - 测试：`TeamTaskStoreTest` 3 + `TeamServiceTest` 1 + `WebServerTest.teamApiTogglesSessionBoard`；
-- 全量 `mvn test`：161 tests，0 failures。
+- 全量 `mvn test`：162 tests，0 failures。
 
 ## 11. 限制和安全边界
 

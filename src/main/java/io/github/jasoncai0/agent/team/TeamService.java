@@ -3,6 +3,7 @@ package io.github.jasoncai0.agent.team;
 import io.github.jasoncai0.agent.agent.AgentRun;
 import io.github.jasoncai0.agent.agent.AgentService;
 import io.github.jasoncai0.agent.agent.RunSnapshot;
+import io.github.jasoncai0.agent.agent.RunStatus;
 import io.github.jasoncai0.agent.permission.PermissionDecision;
 import io.github.jasoncai0.agent.permission.PermissionRequest;
 import io.github.jasoncai0.agent.permission.PermissionScope;
@@ -103,7 +104,9 @@ public final class TeamService implements AutoCloseable {
                     Use team_task_create/list/get/update to define work; team_spawn to create a writable teammate;
                     list_agents/send_message/wait_agent to coordinate. Only the Lead may reassign tasks or approve
                     teammate permission requests in the UI. Task changes do not wake agents; messages do.
-                    Keep final verification and user-facing completion in this Lead session.
+                    wait_agent timeout only means its observation window expired: still_running/queued members are
+                    not failures. Do not reassign or spawn duplicates; inspect list_agents and the task board, then
+                    send_message or wait again. Keep final verification in this Lead session.
                     """;
         }
         return """
@@ -251,9 +254,11 @@ public final class TeamService implements AutoCloseable {
     public Map<String, Object> waitFor(AgentRun actor, List<String> targets, long timeoutMillis) {
         String root = requireEnabledRoot(actor);
         List<TeamMember> members = resolveTargets(root, targets);
-        long deadline = System.currentTimeMillis() + Math.max(1, timeoutMillis);
-        while (System.currentTimeMillis() < deadline) {
-            boolean idle = true;
+        long started = System.currentTimeMillis();
+        long deadline = started + Math.max(1, timeoutMillis);
+        boolean idle = members.isEmpty();
+        while (!idle && System.currentTimeMillis() < deadline) {
+            idle = true;
             for (TeamMember member : members) {
                 if (member.running() || !member.inbox().isEmpty()) {
                     idle = false;
@@ -268,8 +273,29 @@ public final class TeamService implements AutoCloseable {
                 break;
             }
         }
+        boolean timedOut = !idle;
+        List<String> stillRunning = new ArrayList<>();
+        List<String> queued = new ArrayList<>();
+        List<String> completed = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        List<String> idleMembers = new ArrayList<>();
+        for (TeamMember member : members) {
+            switch (outcome(member)) {
+                case "running" -> stillRunning.add(member.name());
+                case "queued" -> queued.add(member.name());
+                case "completed" -> completed.add(member.name());
+                case "failed" -> failed.add(member.name());
+                default -> idleMembers.add(member.name());
+            }
+        }
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("timedOut", members.stream().anyMatch(m -> m.running() || !m.inbox().isEmpty()));
+        result.put("timedOut", timedOut);
+        result.put("waitedMillis", System.currentTimeMillis() - started);
+        result.put("stillRunning", stillRunning);
+        result.put("queued", queued);
+        result.put("completed", completed);
+        result.put("failed", failed);
+        result.put("idle", idleMembers);
         result.put("members", members.stream().map(this::memberView).toList());
         if (isLead(actor)) {
             List<String> messages = new ArrayList<>();
@@ -435,6 +461,28 @@ public final class TeamService implements AutoCloseable {
         return List.copyOf(result);
     }
 
+    private String outcome(TeamMember member) {
+        if (member.running()) {
+            return "running";
+        }
+        if (!member.inbox().isEmpty()) {
+            return "queued";
+        }
+        if (member.lastError() != null) {
+            return "failed";
+        }
+        RunStatus status = RunStatus.valueOf(member.run().state().snapshot().status());
+        if (status == RunStatus.SUCCEEDED) {
+            return "completed";
+        }
+        if (status == RunStatus.FAILED || status == RunStatus.CANCELLED
+                || status == RunStatus.MAX_STEPS || status == RunStatus.LOOP_DETECTED
+                || status == RunStatus.BUDGET_EXCEEDED) {
+            return "failed";
+        }
+        return "idle";
+    }
+
     private Map<String, Object> memberView(TeamMember member) {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("id", member.id());
@@ -445,6 +493,9 @@ public final class TeamService implements AutoCloseable {
         map.put("currentTask", member.currentTask());
         map.put("lastResult", member.lastResult());
         map.put("lastError", member.lastError());
+        String outcome = outcome(member);
+        map.put("state", outcome);
+        map.put("lastOutcome", outcome);
         map.put("status", member.run().state().snapshot().status());
         PermissionRequest pending = member.run().permissions().pendingFor(member.id());
         map.put("pendingPermission", pending == null ? null : pending.publicView());
