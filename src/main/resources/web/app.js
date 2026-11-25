@@ -1773,6 +1773,148 @@ function modalLoading(message) {
 }
 
 
+
+
+async function showTeam() {
+  const id = state.selectedId;
+  if (!id) {
+    toast('Select a session first.', true);
+    return;
+  }
+  openModal('Team');
+  modalLoading('Reading team board...');
+  try {
+    const data = await api(`/api/runs/${encodeURIComponent(id)}/team`);
+    const body = $('modalBody');
+    body.replaceChildren();
+
+    const enabled = Boolean(data.enabled);
+    const head = el('div', 'team-head');
+    const copy = el('div', '');
+    copy.appendChild(el('p', 'modal-lede',
+      enabled
+        ? `${data.members.length} member${data.members.length === 1 ? '' : 's'} · ${data.tasks.filter(t => t.status !== 'deleted').length} task${data.tasks.filter(t => t.status !== 'deleted').length === 1 ? '' : 's'} · Lead approval on.`
+        : 'Team mode is off for this session. The toggle is session-scoped; the global default is off.'));
+    copy.appendChild(el('p', 'team-hint', 'Teammates share this workspace and run in the background. Task changes do not wake them; messages do.'));
+    head.appendChild(copy);
+    const toggleLabel = el('label', 'team-toggle');
+    const toggle = el('input');
+    toggle.type = 'checkbox';
+    toggle.checked = enabled;
+    toggle.addEventListener('change', async () => {
+      toggle.disabled = true;
+      try {
+        await api(`/api/runs/${encodeURIComponent(id)}/team`, {
+          method: 'POST',
+          body: JSON.stringify({ enabled: toggle.checked })
+        });
+        toast(toggle.checked ? 'Team mode enabled for this session.' : 'Team mode disabled for this session.');
+        await showTeam();
+      } catch (error) {
+        toggle.checked = enabled;
+        toast(error.message, true);
+      } finally {
+        toggle.disabled = false;
+      }
+    });
+    toggleLabel.appendChild(toggle);
+    toggleLabel.appendChild(document.createTextNode(enabled ? 'Enabled' : 'Enable team'));
+    head.appendChild(toggleLabel);
+    body.appendChild(head);
+
+    if (enabled) {
+      const memberSection = el('section', 'team-section');
+      const memberHead = el('div', 'team-section-head');
+      memberHead.appendChild(el('h3', '', `Members · ${data.members.length}`));
+      const refresh = el('button', 'ghost', 'Refresh');
+      refresh.type = 'button';
+      refresh.addEventListener('click', showTeam);
+      memberHead.appendChild(refresh);
+      memberSection.appendChild(memberHead);
+      if (!data.members.length) {
+        memberSection.appendChild(el('p', 'team-empty', 'No teammates yet. The Lead can call team_spawn.'));
+      } else {
+        const list = el('div', 'team-member-list');
+        for (const member of data.members) {
+          const row = el('div', 'team-member');
+          const name = el('div', 'team-member-name');
+          name.appendChild(el('strong', '', member.name || member.id));
+          name.appendChild(el('span', `team-dot ${member.running ? 'running' : 'idle'}`, member.running ? 'running' : 'idle'));
+          row.appendChild(name);
+          row.appendChild(el('code', 'team-member-id', member.id));
+          if (member.currentTask) row.appendChild(el('p', 'team-task-current', member.currentTask));
+          if (member.lastError) row.appendChild(el('p', 'team-error', member.lastError));
+          else if (member.lastResult) row.appendChild(el('p', 'team-result', String(member.lastResult).slice(0, 500)));
+          list.appendChild(row);
+        }
+        memberSection.appendChild(list);
+      }
+      body.appendChild(memberSection);
+
+      const taskSection = el('section', 'team-section');
+      taskSection.appendChild(el('h3', '', `Tasks · ${data.tasks.filter(t => t.status !== 'deleted').length}`));
+      const tasks = data.tasks.filter(t => t.status !== 'deleted');
+      if (!tasks.length) {
+        taskSection.appendChild(el('p', 'team-empty', 'No tasks yet. The Lead can call team_task_create.'));
+      } else {
+        for (const task of tasks) {
+          const card = el('div', 'team-task');
+          const top = el('div', 'team-task-top');
+          top.appendChild(el('span', 'team-task-id', task.id));
+          top.appendChild(el('span', `team-status ${task.status}`, task.status.replace('_', ' ')));
+          top.appendChild(el('span', 'team-task-rev', `rev ${task.revision}`));
+          card.appendChild(top);
+          card.appendChild(el('strong', '', task.subject));
+          if (task.ownerName) card.appendChild(el('span', 'team-task-owner', `@${task.ownerName}`));
+          if (task.blockedBy?.length) card.appendChild(el('span', 'team-task-blocked', `blocked by ${task.blockedBy.join(', ')}`));
+          if (task.writeScopes?.length) card.appendChild(el('span', 'team-task-scopes', task.writeScopes.join(' · ')));
+          if (task.description) card.appendChild(el('p', 'team-task-desc', task.description));
+          taskSection.appendChild(card);
+        }
+      }
+      body.appendChild(taskSection);
+
+      const permissions = data.pendingPermissions || [];
+      if (permissions.length) {
+        const permissionSection = el('section', 'team-section team-permissions');
+        permissionSection.appendChild(el('h3', '', `Pending approvals · ${permissions.length}`));
+        for (const permission of permissions) {
+          const card = el('div', 'team-permission');
+          card.appendChild(el('strong', '', permission.summary || permission.tool));
+          card.appendChild(el('p', 'team-task-desc', `${permission.memberName || permission.memberId} · ${permission.kind} · ${permission.detail || ''}`));
+          const actions = el('div', 'modal-actions');
+          for (const [label, decision] of [['Deny', 'deny'], ['Allow once', 'allow'], ['Allow for session', 'allow']]) {
+            const button = el('button', decision === 'allow' ? 'primary' : 'ghost', label);
+            button.type = 'button';
+            button.addEventListener('click', async () => {
+              button.disabled = true;
+              try {
+                await api(`/api/runs/${encodeURIComponent(id)}/team/permissions/${encodeURIComponent(permission.id)}`, {
+                  method: 'POST',
+                  body: JSON.stringify({ decision, scope: label === 'Allow for session' ? 'session' : 'once' })
+                });
+                toast(decision === 'allow' ? 'Approved.' : 'Denied.');
+                await showTeam();
+              } catch (error) {
+                toast(error.message, true);
+              } finally {
+                button.disabled = false;
+              }
+            });
+            actions.appendChild(button);
+          }
+          card.appendChild(actions);
+          permissionSection.appendChild(card);
+        }
+        body.appendChild(permissionSection);
+      }
+    }
+  } catch (error) {
+    $('modalBody').replaceChildren(el('div', 'modal-error', error.message));
+  }
+}
+
+
 async function showMemory() {
   openModal('Memory');
   modalLoading('Reading Mem0 memory...');
@@ -2012,6 +2154,7 @@ function wireEvents() {
   $('skillsBtn').addEventListener('click', showSkills);
   $('toolsBtn').addEventListener('click', showTools);
   $('memoryBtn').addEventListener('click', showMemory);
+  $('teamBtn').addEventListener('click', showTeam);
   $('modalClose').addEventListener('click', closeModal);
   $('modalBackdrop').addEventListener('click', (event) => {
     if (event.target === $('modalBackdrop')) closeModal();

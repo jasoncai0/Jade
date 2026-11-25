@@ -181,7 +181,10 @@ public final class WebServer implements AutoCloseable {
         }
         if (path.equals("/api/runs")) {
             if (method.equals("GET")) {
-                sendData(exchange, 200, agentService.list());
+                var visible = agentService.list().stream()
+                        .filter(run -> !run.id().startsWith("team-") && !run.id().startsWith("sub-"))
+                        .toList();
+                sendData(exchange, 200, visible);
                 return;
             }
             if (method.equals("POST")) {
@@ -241,6 +244,29 @@ public final class WebServer implements AutoCloseable {
         }
         if (action.equals("questions") && method.equals("POST")) {
             resolveQuestion(exchange, id, segments.length > 2 ? segments[2] : null);
+            return;
+        }
+        if (action.equals("team") && method.equals("GET") && segments.length == 2) {
+            sendData(exchange, 200, agentService.teamSummary(id));
+            return;
+        }
+        if (action.equals("team") && method.equals("POST") && segments.length == 2) {
+            JsonNode body = readJson(exchange);
+            if (body == null || !body.isObject() || !body.has("enabled")) {
+                sendError(exchange, 400, "JSON body must contain enabled");
+                return;
+            }
+            sendData(exchange, 200, agentService.setTeamEnabled(id, body.path("enabled").asBoolean(false)));
+            return;
+        }
+        if (action.equals("team") && segments.length > 3 && segments[2].equals("tasks")
+                && method.equals("GET")) {
+            sendData(exchange, 200, agentService.teamTask(id, segments[3]));
+            return;
+        }
+        if (action.equals("team") && segments.length > 3 && segments[2].equals("permissions")
+                && method.equals("POST")) {
+            resolveTeamPermission(exchange, id, segments[3]);
             return;
         }
         if (action.equals("files") && method.equals("GET")) {
@@ -402,6 +428,33 @@ public final class WebServer implements AutoCloseable {
         sendData(exchange, 200, data);
     }
 
+
+    private void resolveTeamPermission(HttpExchange exchange, String id, String requestId) throws IOException {
+        if (requestId == null || requestId.isBlank()) {
+            sendError(exchange, 400, "Permission request id is required");
+            return;
+        }
+        JsonNode body = readJson(exchange);
+        if (body == null || !body.isObject()) {
+            sendError(exchange, 400, "JSON body must be an object");
+            return;
+        }
+        PermissionDecision decision = "allow".equalsIgnoreCase(body.path("decision").asText("deny"))
+                ? PermissionDecision.ALLOW : PermissionDecision.DENY;
+        PermissionScope scope = PermissionScope.fromId(body.path("scope").asText("once"));
+        boolean resolved = agentService.resolveTeamPermission(id, requestId, decision, scope,
+                body.path("reason").asText("lead"));
+        if (!resolved) {
+            sendError(exchange, 409, "No pending team permission request " + requestId);
+            return;
+        }
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("requestId", requestId);
+        data.put("decision", decision.name());
+        data.put("scope", scope.id());
+        data.put("team", agentService.teamSummary(id));
+        sendData(exchange, 200, data);
+    }
 
     private void resolveQuestion(HttpExchange exchange, String id, String requestId) throws IOException {
         if (requestId == null || requestId.isBlank()) {

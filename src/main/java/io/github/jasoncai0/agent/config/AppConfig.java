@@ -17,20 +17,27 @@ public record AppConfig(
         AgentSettings agent,
         ServerSettings server,
         MysqlSettings mysql,
-        MemorySettings memory
+        MemorySettings memory,
+        boolean teamDefault
 ) {
 
     /** Backwards-compatible constructor for tests and embedded use. */
     public AppConfig(Path projectRoot, Path skillsDir, Path workspacesDir, LlmSettings llm,
                      AgentSettings agent, ServerSettings server) {
-        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, null, null);
+        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, null, null, false);
     }
 
     /** Backwards-compatible constructor before long-term memory was added. */
     public AppConfig(Path projectRoot, Path skillsDir, Path workspacesDir, LlmSettings llm,
                      AgentSettings agent, ServerSettings server, MysqlSettings mysql) {
-        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, mysql, null);
+        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, mysql, null, false);
     }
+    /** Backwards-compatible constructor before team defaults were added. */
+    public AppConfig(Path projectRoot, Path skillsDir, Path workspacesDir, LlmSettings llm,
+                     AgentSettings agent, ServerSettings server, MysqlSettings mysql, MemorySettings memory) {
+        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, mysql, memory, false);
+    }
+
     public static final String VERSION = "1.4.0";
 
     public static AppConfig load(Path cwd) {
@@ -97,7 +104,8 @@ public record AppConfig(
                 agent,
                 server,
                 mysql,
-                memory
+                memory,
+                bool(get, "AGENT_TEAM_ENABLED", false)
         );
     }
 

@@ -273,6 +273,43 @@ class WebServerTest {
         return count;
     }
 
+
+    @Test
+    void teamApiTogglesSessionBoard() throws Exception {
+        Path root = temp.resolve("team-app");
+        Path skills = root.resolve("skills");
+        Files.createDirectories(skills);
+        AppConfig config = new AppConfig(
+                root, skills, root.resolve("runs"),
+                new LlmSettings("sk-test", "http://127.0.0.1:1", "fake", 5, 1024),
+                new AgentSettings(3, 3, 20_000, 30, false, PermissionMode.BYPASS),
+                new ServerSettings("127.0.0.1", 0), null, null, true
+        );
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.script.add(new ChatResult("done", null, List.of(), "stop", Usage.ZERO));
+        AgentService service = new AgentService(config, llm);
+        WebServer server = new WebServer(service, config.server());
+        try {
+            server.start();
+            String base = server.url();
+            HttpResponse<String> created = post(base + "/api/runs", "{\"task\":\"team\"}");
+            assertEquals(202, created.statusCode());
+            String runId = JSON.readTree(created.body()).path("data").path("run").path("id").asText();
+            service.await(runId, Duration.ofSeconds(5));
+
+            HttpResponse<String> summary = get(base + "/api/runs/" + runId + "/team");
+            assertEquals(200, summary.statusCode());
+            assertTrue(JSON.readTree(summary.body()).path("data").path("enabled").asBoolean());
+
+            HttpResponse<String> disabled = post(base + "/api/runs/" + runId + "/team", "{\"enabled\":false}");
+            assertEquals(200, disabled.statusCode());
+            assertFalse(JSON.readTree(disabled.body()).path("data").path("enabled").asBoolean());
+        } finally {
+            server.close();
+            service.close();
+        }
+    }
+
     private HttpResponse<String> get(String url) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(10))

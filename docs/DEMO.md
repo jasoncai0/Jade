@@ -235,3 +235,19 @@ about a second: only the newest 150 compact events load. Use `Load earlier
 events` to page backward; status, plan, files, and telemetry stay at the final
 snapshot. Expand an `LLM REQUEST` card and choose `Load full request body` to
 fetch one archived payload.
+
+## 9. Team mode (optional)
+
+1. Open a root session and click **Team** in the top bar.
+2. Enable the toggle. The dialog reports `0 members · 0 tasks`.
+3. Ask the Lead: "Create a team task titled Audit describing Check README, then
+   spawn a worker named reviewer with task 'read the README and reply done' and
+   wait for it." The Lead uses the team tools while the worker runs in the same
+   workspace.
+4. Refresh the Team dialog to see the member, its current task/result, and the
+   read-only task board. If the worker requests a write, approve it from the
+   same dialog.
+5. Disable the toggle to hide the team tools; the task board remains.
+
+Team is off by default and is not a replacement for the one-shot read-only
+`delegate_task` subagent.

@@ -40,7 +40,7 @@ MySQL 用 `docker compose up -d`；数据库 `jade`，端口 `127.0.0.1:3307`。
 - 会话：持续追问、重启恢复、fork、MySQL 历史分页、Trace 正/倒序、历史页面懒加载。
 - 安全与正确性：四档权限（balanced 默认）、审批卡、Goal review、反思机制、重复工具/命令形状/无进展护栏、可选 token 预算。
 - 上下文：pinned memory、工具输出 micro-compaction、模型摘要、溢出重试与 spill（见 `docs/DSH-GAP-ANALYSIS.md`）。
-- 扩展：Mem0 长期记忆（项目隔离；`AGENT_MEMORY_MODE=on|shadow|off`，sidecar 不可达自动 Noop）、MCP tools + resources（stdio / Streamable HTTP）、只读子代理、技能目录开关。
+- 扩展：Mem0 长期记忆（项目隔离；`AGENT_MEMORY_MODE=on|shadow|off`，sidecar 不可达自动 Noop）、MCP tools + resources（stdio / Streamable HTTP）、Team/TeamBoard（session 级开关、MySQL 任务板、可写 teammate、Lead 审批）、只读子代理、技能目录开关。
 - 观测：SSE、完整请求体 Trace、运行指标、沙箱状态 health/banner。
 
 ## 关键约束与已知限制
@@ -48,6 +48,7 @@ MySQL 用 `docker compose up -d`；数据库 `jade`，端口 `127.0.0.1:3307`。
 - `AGENT_MAX_STEPS=0` 表示无限；正数是显式上限。没有默认 token 预算；无人值守长任务可显式设 `AGENT_TOKEN_BUDGET`。
 - 默认 `AGENT_SANDBOX=off`，本地执行使用宿主工具链；macOS `sandbox-exec` 只是写/网络隔离，不是容器或 VM，读仍共享宿主。
 - MCP 工具默认走审批；GitHub MCP 需要 PAT，当前没有在真实 GitHub 上完成写入烟测。
+- Team 默认关闭（`AGENT_TEAM_ENABLED=false`），session 级开关；任务板持久化在 MySQL，成员为 runtime-only，重启后不复活。
 - MCP 未实现 prompts / sampling / OAuth；HTTP 启动重试是有限退避，不是完整重连状态机。
 - 单用户、localhost、无鉴权；不要暴露公网。
 - Web UI 为 Codex 风格：左侧会话栏、中间阅读列、底部 composer；Session/Trace 双 Tab，Context 详情在右侧抽屉。Trace 默认收起在 Tab 内。
@@ -65,6 +66,7 @@ MySQL 用 `docker compose up -d`；数据库 `jade`，端口 `127.0.0.1:3307`。
 - `docs/MEM0-SIDECAR-REPORT.md`：Mem0 sidecar 实现与 BGE 端到端验收。
 - `docker/mem0/`：Mem0 OSS + FastEmbed BGE sidecar。
 - `docs/CODE-REVIEW-2026-11-18.md`：全量走查、P0/P1/P2 TODO。
+- `docs/superpowers/specs/2026-11-25-agent-team-design.md`：Team/TeamBoard 最终设计与验收标准。
 
 ## 博客踩坑记忆
 

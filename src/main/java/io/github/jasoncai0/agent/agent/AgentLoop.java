@@ -60,6 +60,7 @@ public final class AgentLoop {
     private final ToolLoopGuard loopGuard = new ToolLoopGuard();
     /** Live delta sink; null means nobody is watching, so deltas are dropped. */
     private volatile LiveDeltaBus liveDeltas;
+    private volatile String teamPolicy = "";
 
     public AgentLoop(LlmClient llm, ToolRegistry tools, SkillRegistry skills,
                      AgentSettings settings, int maxOutputTokens) {
@@ -111,6 +112,12 @@ public final class AgentLoop {
         this.questionBroker = questionBroker == null ? new QuestionBroker() : questionBroker;
         this.goalReviewer = goalReviewer == null ? GoalReviewer.NOOP : goalReviewer;
         this.memory = memory == null ? NoopMemoryService.off() : memory;
+    }
+
+    /** Adds the team coordination contract to the system prompt. */
+    public AgentLoop withTeamPolicy(String policy) {
+        this.teamPolicy = policy == null ? "" : policy;
+        return this;
     }
 
     /** Routes streaming deltas to a live bus (browser SSE). Optional. */
@@ -1069,6 +1076,9 @@ public final class AgentLoop {
                 skills.catalog(),
                 preloadedSkills(selected)
         ));
+        if (!teamPolicy.isBlank()) {
+            out.append("\n").append(teamPolicy);
+        }
         return out.toString();
     }
 

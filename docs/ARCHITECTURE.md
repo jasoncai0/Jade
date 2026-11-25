@@ -533,3 +533,32 @@ checkpoint on a virtual thread, so Mem0 latency never extends the run. The
 default scope is project isolation; global items are limited to explicit
 preferences and are capped during selection. `AGENT_MEMORY_MODE` supports `on`,
 `shadow` (retrieve and log without injecting), and `off`.
+
+## 16. Team mode and TeamBoard
+
+Team mode is session-scoped: a root run owns an enabled flag and a MySQL-backed
+task board, and can spawn writable teammates that share its workspace. It is
+off by default (`AGENT_TEAM_ENABLED=false`); the Team dialog or
+`POST /api/runs/{id}/team` toggles it. A teammate is a normal `AgentRun` with
+the `team-` prefix, its own event log and permission broker, and a persistent
+same-session loop. It is not a one-shot read-only subagent.
+
+`TeamService` owns the member registry and task operations. Tasks use a
+revision CAS (`expectedRevision`), blocked-by dependencies, tombstones, and
+advisory workspace-relative write scopes. They do not wake teammates; only
+`send_message` does. Eight tools are registered only while the root is
+enabled: `team_task_create`, `team_task_list`, `team_task_get`,
+`team_task_update`, `team_spawn`, `list_agents`, `send_message`, `wait_agent`.
+Teammates get write/compile/run tools; the Lead remains responsible for final
+verification.
+
+The board is exposed at `GET /api/runs/{id}/team`, with task and permission
+sub-routes. The UI is intentionally read-only, like the reference
+implementation: the Lead creates tasks through tools, and the dialog displays
+members, task state, and pending child approvals. A child's permission request
+is resolved through the Lead's Team dialog; scope `session` applies to that
+child's run.
+
+Membership is runtime-only. The task board and enabled flag persist in MySQL,
+but after a restart teammates are not resurrected; tasks remain available for a
+new team. Team children are hidden from the top-level session list.

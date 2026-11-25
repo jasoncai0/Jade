@@ -462,6 +462,6 @@ public final class CodingAgentApplication {
                     options.port() == null ? server.port() : options.port());
         }
         return new AppConfig(config.projectRoot(), config.skillsDir(), config.workspacesDir(),
-                config.llm(), agent, server, config.mysql(), config.memory());
+                config.llm(), agent, server, config.mysql(), config.memory(), config.teamDefault());
     }
 }

@@ -12,9 +12,14 @@ import io.github.jasoncai0.agent.llm.DeepSeekClient;
 import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.mcp.McpManager;
 import io.github.jasoncai0.agent.memory.MemoryService;
+import io.github.jasoncai0.agent.memory.NoopMemoryService;
 import io.github.jasoncai0.agent.memory.MemoryServices;
 import io.github.jasoncai0.agent.skill.Skill;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
+import io.github.jasoncai0.agent.team.TeamMember;
+import io.github.jasoncai0.agent.team.TeamService;
+import io.github.jasoncai0.agent.team.TeamStores;
+import io.github.jasoncai0.agent.team.TeamToolset;
 import io.github.jasoncai0.agent.tool.Tool;
 import io.github.jasoncai0.agent.tool.ToolRegistry;
 import io.github.jasoncai0.agent.tool.builtin.BuiltInTools;
@@ -74,6 +79,7 @@ public final class AgentService implements AutoCloseable {
     private final ToolRegistry tools;
     private final McpManager mcp;
     private final MemoryService memory;
+    private final TeamService team;
     private final ExecutorService executor;
     private final EventStore eventStore;
     private final Map<String, AgentRun> runs = new ConcurrentHashMap<>();
@@ -98,6 +104,7 @@ public final class AgentService implements AutoCloseable {
         this.tools = BuiltInTools.registry();
         this.mcp = McpManager.connect(config.projectRoot(), this.tools);
         this.memory = MemoryServices.create(config.memory());
+        this.team = new TeamService(this, TeamStores.create(config.mysql()), config.teamDefault());
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
             Files.createDirectories(config.workspacesDir());
@@ -164,6 +171,7 @@ public final class AgentService implements AutoCloseable {
             throw new IllegalStateException("Could not start agent turn");
         }
         runs.put(id, run);
+        team.ensureRoot(id);
         state.setFiles(workspace.listFiles(500, 8));
         if (eventStore != null) {
             eventStore.saveSnapshot(state.snapshot());
@@ -414,11 +422,24 @@ public final class AgentService implements AutoCloseable {
      * never do, and their registry is also a separate read-only whitelist.
      */
     private ToolRegistry toolsForRun(AgentRun run) {
+        if (team.isMember(run)) {
+            ToolRegistry registry = new ToolRegistry();
+            for (Tool tool : BuiltInTools.all()) {
+                if (!tool.spec().name().equals("ask_user")) {
+                    registry.register(tool);
+                }
+            }
+            TeamToolset.register(registry, team, run);
+            return registry;
+        }
         if (run.state().isSubagent()) {
             return subagentTools();
         }
         ToolRegistry registry = new ToolRegistry().registerAll(tools.all());
         registry.register(new DelegateTaskTool(subagents(), run));
+        if (team.enabledFor(run)) {
+            TeamToolset.register(registry, team, run);
+        }
         return registry;
     }
 
@@ -489,6 +510,67 @@ public final class AgentService implements AutoCloseable {
         AgentSettings base = config.agent();
         return new AgentSettings(40, 8, base.contextCharBudget(), base.commandTimeoutSeconds(),
                 false, PermissionMode.READ_ONLY, 0, false, 30_000, true, false);
+    }
+
+    public AgentRun newTeamRun(AgentRun parent, String rootRunId, String name, String task) {
+        String id = "team-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        Workspace workspace = Workspace.open(parent.workspace().root());
+        RunState state = new RunState(id, task, parent.state().workspace(), config.agent().maxSteps());
+        state.markSubagent(parent.id());
+        RunEventLog events = new RunEventLog(id, eventStore);
+        AgentRun child = new AgentRun(id, workspace, state, events);
+        runs.put(id, child);
+        state.setFiles(workspace.listFiles(500, 8));
+        if (eventStore != null) {
+            eventStore.saveSnapshot(state.snapshot());
+        }
+        Log.info("team.member.created", Map.of("rootRunId", rootRunId, "memberId", id, "name", name));
+        return child;
+    }
+
+    public RunSnapshot runTeamTurn(TeamMember member, String userMessage, boolean continuation) {
+        AgentRun run = member.run();
+        CompletableFuture<RunSnapshot> completion = new CompletableFuture<>();
+        RunControl control = new RunControl();
+        if (!run.beginTurn(control, completion)) {
+            throw new IllegalStateException("team member is already running");
+        }
+        control.attach(Thread.currentThread());
+        try {
+            AgentSettings base = config.agent();
+            AgentSettings teamSettings = new AgentSettings(
+                    base.maxSteps(), base.maxToolCallsPerStep(), base.contextCharBudget(),
+                    base.commandTimeoutSeconds(), base.autoVerify(), base.permissionMode(),
+                    base.tokenBudget(), false, base.contextTokenBudget(),
+                    base.overflowRecovery(), base.preloadSkills());
+            AgentLoop loop = new AgentLoop(
+                    llm, toolsForRun(run), skills, teamSettings, config.llm().maxOutputTokens(),
+                    new Verifier(), run.permissions(), run.permissionSession(), run.questions(),
+                    GoalReviewer.NOOP, NoopMemoryService.off())
+                    .withLiveDeltas(run.deltas())
+                    .withTeamPolicy(team.teamPolicy(run));
+            RunSnapshot snapshot = continuation
+                    ? loop.continueSession(userMessage, RunArtifacts.loadMessages(run.workspace().root()),
+                            run.workspace(), run.state(), run.events(), control)
+                    : loop.run(userMessage, run.workspace(), run.state(), run.events(), control);
+            completion.complete(snapshot);
+            return snapshot;
+        } catch (Throwable t) {
+            if (!run.state().snapshot().terminal()) {
+                run.state().fail(t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage());
+            }
+            completion.completeExceptionally(t);
+            throw t instanceof RuntimeException re ? re : new IllegalStateException(t);
+        } finally {
+            if (eventStore != null) {
+                try {
+                    eventStore.saveSnapshot(run.state().snapshot());
+                } catch (RuntimeException e) {
+                    Log.error("team.snapshot.persist_failed", e, Map.of("runId", run.id()));
+                }
+            }
+            run.finishTurn();
+        }
     }
 
     private void executeTurn(AgentRun run, RunControl control,
@@ -596,6 +678,39 @@ public final class AgentService implements AutoCloseable {
         return result;
     }
 
+    public TeamService team() {
+        return team;
+    }
+
+    public Map<String, Object> teamSummary(String id) {
+        AgentRun run = require(id);
+        if (!team.isRoot(run)) {
+            throw new IllegalArgumentException("Team board is only available on a root session");
+        }
+        team.ensureRoot(id);
+        return team.summary(id, team.enabled(id));
+    }
+
+    public Map<String, Object> setTeamEnabled(String id, boolean enabled) {
+        AgentRun run = require(id);
+        team.setEnabled(run, enabled);
+        return team.summary(id, enabled);
+    }
+
+    public io.github.jasoncai0.agent.team.TeamTask teamTask(String id, String taskId) {
+        AgentRun run = require(id);
+        return team.task(run, taskId);
+    }
+
+    public boolean resolveTeamPermission(String rootId, String requestId, PermissionDecision decision,
+                                         PermissionScope scope, String reason) {
+        AgentRun run = require(rootId);
+        if (!team.isRoot(run)) {
+            throw new IllegalArgumentException("only the Lead session can approve team permissions");
+        }
+        return team.resolvePermission(rootId, requestId, decision, scope, reason);
+    }
+
     public PermissionResult resolvePermission(String id, String requestId,
                                               PermissionDecision decision, PermissionScope scope,
                                               String reason) {
@@ -630,6 +745,7 @@ public final class AgentService implements AutoCloseable {
         summary.put("skillCount", skills.all().size());
         summary.put("mcp", mcp.summary());
         summary.put("memory", memory.health().toMap());
+        summary.put("teamDefaultEnabled", team.defaultEnabled());
         summary.put("languages", Language.ids());
         CommandSandbox sandbox = new CommandRunner().sandbox();
         summary.put("sandbox", sandbox.modeName());
@@ -869,6 +985,7 @@ public final class AgentService implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        team.close();
         mcp.close();
         memory.close();
         for (AgentRun run : runs.values()) {

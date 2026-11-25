@@ -1,0 +1,466 @@
+package io.github.jasoncai0.agent.team;
+
+import io.github.jasoncai0.agent.agent.AgentRun;
+import io.github.jasoncai0.agent.agent.AgentService;
+import io.github.jasoncai0.agent.agent.RunSnapshot;
+import io.github.jasoncai0.agent.permission.PermissionDecision;
+import io.github.jasoncai0.agent.permission.PermissionRequest;
+import io.github.jasoncai0.agent.permission.PermissionScope;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Per-root team runtime. Tasks are durable; members are live, shared-workspace
+ * agent sessions. Team members are intentionally unbounded per user decision.
+ */
+public final class TeamService implements AutoCloseable {
+    private static final int MAX_TASKS = 256;
+
+    private final AgentService agents;
+    private final TeamTaskStore store;
+    private final boolean defaultEnabled;
+    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final Map<String, TeamMember> membersById = new ConcurrentHashMap<>();
+    private final Map<String, CopyOnWriteArrayList<TeamMember>> membersByRoot = new ConcurrentHashMap<>();
+    private final Map<String, java.util.concurrent.BlockingQueue<String>> leadInbox = new ConcurrentHashMap<>();
+    private final Map<String, Object> rootLocks = new ConcurrentHashMap<>();
+    private volatile boolean closed;
+
+    public TeamService(AgentService agents, TeamTaskStore store, boolean defaultEnabled) {
+        this.agents = agents;
+        this.store = store;
+        this.defaultEnabled = defaultEnabled;
+    }
+
+    public void ensureRoot(String rootRunId) {
+        store.ensureTeam(rootRunId, defaultEnabled);
+    }
+
+    public boolean enabled(String rootRunId) {
+        return store.enabled(rootRunId);
+    }
+
+    public boolean enabledFor(AgentRun run) {
+        String root = rootFor(run);
+        return root != null && enabled(root);
+    }
+
+    public boolean defaultEnabled() {
+        return defaultEnabled;
+    }
+
+    public void setEnabled(AgentRun root, boolean enabled) {
+        if (!isRoot(root)) {
+            throw new IllegalArgumentException("team toggle is only available on a root session");
+        }
+        store.setEnabled(root.id(), enabled);
+    }
+
+    public String rootFor(AgentRun run) {
+        TeamMember member = membersById.get(run.id());
+        if (member != null) {
+            return member.rootRunId();
+        }
+        if (run.state().isSubagent()) {
+            return null;
+        }
+        return run.id();
+    }
+
+    public boolean isRoot(AgentRun run) {
+        return !run.state().isSubagent() && run.state().parentRunId() == null;
+    }
+
+    public boolean isLead(AgentRun run) {
+        String root = rootFor(run);
+        return root != null && root.equals(run.id());
+    }
+
+    public boolean isMember(AgentRun run) {
+        return membersById.containsKey(run.id());
+    }
+
+    public String teamPolicy(AgentRun run) {
+        if (!enabledFor(run)) {
+            return "";
+        }
+        if (isLead(run)) {
+            return """
+                    ## Team mode (enabled)
+                    You are the Lead. The team board is durable and shared with teammates.
+                    Use team_task_create/list/get/update to define work; team_spawn to create a writable teammate;
+                    list_agents/send_message/wait_agent to coordinate. Only the Lead may reassign tasks or approve
+                    teammate permission requests in the UI. Task changes do not wake agents; messages do.
+                    Keep final verification and user-facing completion in this Lead session.
+                    """;
+        }
+        return """
+                ## Team mode (teammate)
+                You are a teammate on the shared team board. Claim ready tasks, do the work in the shared workspace,
+                update task status and write scopes, and report back with send_message target="lead" when done or blocked.
+                You may spawn further teammates with team_spawn. Do not ask the end user directly; ask the Lead.
+                """;
+    }
+
+    public TeamTask createTask(AgentRun actor, String subject, String description,
+                               List<String> blockedBy, List<String> writeScopes) {
+        String root = requireEnabledRoot(actor);
+        synchronized (lock(root)) {
+            List<TeamTask> tasks = store.list(root);
+            long active = tasks.stream().filter(t -> t.status() != TeamTaskStatus.DELETED).count();
+            if (active >= MAX_TASKS) {
+                throw new IllegalArgumentException("team already has " + MAX_TASKS + " active tasks");
+            }
+            for (String id : safe(blockedBy)) {
+                if (store.find(root, id).isEmpty()) {
+                    throw new IllegalArgumentException("unknown blockedBy task: " + id);
+                }
+            }
+            return store.create(root, subject, description, safe(blockedBy), normalizeScopes(writeScopes));
+        }
+    }
+
+    public List<TeamTask> tasks(AgentRun actor) {
+        String root = requireEnabledRoot(actor);
+        return store.list(root);
+    }
+
+    public TeamTask task(AgentRun actor, String taskId) {
+        String root = requireEnabledRoot(actor);
+        return store.find(root, taskId).orElseThrow(() -> new IllegalArgumentException("task not found: " + taskId));
+    }
+
+    public TeamTask updateTask(AgentRun actor, String taskId, String action, long expectedRevision,
+                               String subject, String description, List<String> blockedBy,
+                               List<String> writeScopes, String owner) {
+        String root = requireEnabledRoot(actor);
+        synchronized (lock(root)) {
+            TeamTask task = store.find(root, taskId)
+                    .orElseThrow(() -> new IllegalArgumentException("task not found: " + taskId));
+            if (task.revision() != expectedRevision) {
+                throw new IllegalStateException("team task revision changed; refresh the board");
+            }
+            if (action == null || action.isBlank()) {
+                throw new IllegalArgumentException("action is required");
+            }
+            String ownerId = actor.id();
+            String ownerName = isLead(actor) ? "lead" : member(actor).name();
+            boolean privileged = isLead(actor) || ownerId.equals(task.ownerId());
+            TeamTask next = switch (action.trim().toLowerCase()) {
+                case "claim" -> {
+                    if (!task.status().active()) throw new IllegalArgumentException("only active tasks can be claimed");
+                    if (task.ownerId() != null) throw new IllegalArgumentException("task already has an owner");
+                    if (!ready(root, task)) throw new IllegalArgumentException("task is blocked by unfinished dependencies");
+                    yield task.ownedBy(ownerId, ownerName, TeamTaskStatus.IN_PROGRESS, System.currentTimeMillis());
+                }
+                case "release" -> {
+                    if (!privileged) throw new IllegalArgumentException("only the owner or Lead can release");
+                    yield task.ownedBy(null, null, TeamTaskStatus.PENDING, System.currentTimeMillis());
+                }
+                case "complete" -> {
+                    if (!privileged) throw new IllegalArgumentException("only the owner or Lead can complete");
+                    yield task.withStatus(TeamTaskStatus.COMPLETED, System.currentTimeMillis());
+                }
+                case "reopen" -> {
+                    if (!privileged) throw new IllegalArgumentException("only the owner or Lead can reopen");
+                    yield task.ownedBy(null, null, TeamTaskStatus.PENDING, System.currentTimeMillis());
+                }
+                case "reassign" -> {
+                    if (!isLead(actor)) throw new IllegalArgumentException("only the Lead can reassign");
+                    if (owner == null || owner.isBlank()) throw new IllegalArgumentException("owner is required");
+                    TeamMember target = memberByName(root, owner);
+                    yield task.ownedBy(target.id(), target.name(), TeamTaskStatus.PENDING, System.currentTimeMillis());
+                }
+                case "edit" -> {
+                    if (!privileged) throw new IllegalArgumentException("only the owner or Lead can edit");
+                    yield task.withFields(subject, description, blockedBy,
+                            writeScopes == null ? null : normalizeScopes(writeScopes), System.currentTimeMillis());
+                }
+                case "set_dependencies" -> {
+                    if (!privileged) throw new IllegalArgumentException("only the owner or Lead can change dependencies");
+                    List<String> deps = safe(blockedBy);
+                    for (String dep : deps) {
+                        if (dep.equals(task.id())) throw new IllegalArgumentException("a task cannot block itself");
+                        if (store.find(root, dep).isEmpty()) throw new IllegalArgumentException("unknown blocker: " + dep);
+                    }
+                    yield task.withFields(null, null, deps, null, System.currentTimeMillis())
+                            .withStatus(TeamTaskStatus.PENDING, System.currentTimeMillis());
+                }
+                case "delete" -> {
+                    if (!privileged) throw new IllegalArgumentException("only the owner or Lead can delete");
+                    for (TeamTask other : store.list(root)) {
+                        if (other.status() != TeamTaskStatus.DELETED && other.blockedBy().contains(task.id())) {
+                            throw new IllegalArgumentException("task is still a dependency of " + other.id());
+                        }
+                    }
+                    yield task.ownedBy(null, null, TeamTaskStatus.DELETED, System.currentTimeMillis());
+                }
+                default -> throw new IllegalArgumentException("unknown task action: " + action);
+            };
+            TeamTask saved = store.save(root, task, next);
+            if (saved == null) throw new IllegalStateException("team task revision changed; refresh the board");
+            return saved;
+        }
+    }
+
+    public TeamMember spawn(AgentRun actor, String requestedName, String task) {
+        String root = requireEnabledRoot(actor);
+        if (task == null || task.isBlank()) throw new IllegalArgumentException("task is required");
+        String name = uniqueName(root, requestedName);
+        AgentRun child = agents.newTeamRun(actor, root, name, task);
+        TeamMember member = new TeamMember(child.id(), name, root, actor.id(), child);
+        membersById.put(child.id(), member);
+        membersByRoot.computeIfAbsent(root, ignored -> new CopyOnWriteArrayList<>()).add(member);
+        member.inbox().offer(new TeamMember.InboxMessage(task, false));
+        try {
+            executor.submit(() -> memberLoop(member));
+        } catch (RuntimeException e) {
+            membersById.remove(child.id());
+            membersByRoot.getOrDefault(root, new CopyOnWriteArrayList<>()).remove(member);
+            throw e;
+        }
+        return member;
+    }
+
+    public String send(AgentRun actor, String target, String message) {
+        String root = requireEnabledRoot(actor);
+        if (message == null || message.isBlank()) throw new IllegalArgumentException("message is required");
+        String name = target == null ? "" : target.trim();
+        if (name.equals("lead") || name.equals(root)) {
+            if (isLead(actor)) throw new IllegalArgumentException("Lead cannot message itself");
+            leadInbox.computeIfAbsent(root, ignored -> new java.util.concurrent.LinkedBlockingQueue<>()).offer(message.trim());
+            return "queued to lead";
+        }
+        TeamMember member = memberByName(root, name);
+        member.inbox().offer(new TeamMember.InboxMessage(message.trim(), true));
+        return "queued to " + member.name();
+    }
+
+    public Map<String, Object> waitFor(AgentRun actor, List<String> targets, long timeoutMillis) {
+        String root = requireEnabledRoot(actor);
+        List<TeamMember> members = resolveTargets(root, targets);
+        long deadline = System.currentTimeMillis() + Math.max(1, timeoutMillis);
+        while (System.currentTimeMillis() < deadline) {
+            boolean idle = true;
+            for (TeamMember member : members) {
+                if (member.running() || !member.inbox().isEmpty()) {
+                    idle = false;
+                    break;
+                }
+            }
+            if (idle) break;
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("timedOut", members.stream().anyMatch(m -> m.running() || !m.inbox().isEmpty()));
+        result.put("members", members.stream().map(this::memberView).toList());
+        if (isLead(actor)) {
+            List<String> messages = new ArrayList<>();
+            java.util.concurrent.BlockingQueue<String> queue = leadInbox.get(root);
+            if (queue != null) queue.drainTo(messages);
+            result.put("messages", messages);
+        }
+        return result;
+    }
+
+    public List<Map<String, Object>> listMembers(AgentRun actor) {
+        String root = requireEnabledRoot(actor);
+        return membersByRoot.getOrDefault(root, new CopyOnWriteArrayList<>()).stream()
+                .sorted(Comparator.comparing(TeamMember::name)).map(this::memberView).toList();
+    }
+
+    public List<Map<String, Object>> pendingPermissions(String rootRunId) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (TeamMember member : membersByRoot.getOrDefault(rootRunId, new CopyOnWriteArrayList<>())) {
+            PermissionRequest request = member.run().permissions().pendingFor(member.id());
+            if (request != null) {
+                Map<String, Object> row = new LinkedHashMap<>(request.publicView());
+                row.put("memberId", member.id());
+                row.put("memberName", member.name());
+                result.add(row);
+            }
+        }
+        return result;
+    }
+
+    public boolean resolvePermission(String rootRunId, String requestId, PermissionDecision decision,
+                                     PermissionScope scope, String reason) {
+        for (TeamMember member : membersByRoot.getOrDefault(rootRunId, new CopyOnWriteArrayList<>())) {
+            PermissionRequest request = member.run().permissions().pendingFor(member.id());
+            if (request != null && request.id().equals(requestId)) {
+                return member.run().permissions().resolve(requestId, decision, scope, reason) != null;
+            }
+        }
+        return false;
+    }
+
+    public Map<String, Object> summary(String rootRunId, boolean enabled) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("enabled", enabled);
+        map.put("defaultEnabled", defaultEnabled);
+        map.put("tasks", store.list(rootRunId));
+        map.put("members", membersByRoot.getOrDefault(rootRunId, new CopyOnWriteArrayList<>())
+                .stream().map(this::memberView).toList());
+        map.put("pendingPermissions", pendingPermissions(rootRunId));
+        return map;
+    }
+
+    public TeamMember memberByRun(String runId) {
+        return membersById.get(runId);
+    }
+
+    private void memberLoop(TeamMember member) {
+        while (!closed && !member.closed()) {
+            TeamMember.InboxMessage message;
+            try {
+                message = member.inbox().take();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+            if (closed || member.closed() || message.text().isBlank() && !message.continuation()) {
+                break;
+            }
+            member.running(true);
+            member.currentTask(message.text());
+            member.lastError(null);
+            try {
+                RunSnapshot snapshot = agents.runTeamTurn(member, message.text(), message.continuation());
+                member.lastResult(snapshot.finalAnswer() == null ? snapshot.status() : snapshot.finalAnswer());
+            } catch (Throwable t) {
+                member.lastError(t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage());
+            } finally {
+                member.running(false);
+                synchronized (member.monitor()) {
+                    member.monitor().notifyAll();
+                }
+            }
+        }
+    }
+
+    private List<TeamMember> resolveTargets(String root, List<String> targets) {
+        List<TeamMember> all = membersByRoot.getOrDefault(root, new CopyOnWriteArrayList<>());
+        if (targets == null || targets.isEmpty()) {
+            return new ArrayList<>(all);
+        }
+        List<TeamMember> selected = new ArrayList<>();
+        for (String target : targets) {
+            selected.add(memberByName(root, target));
+        }
+        return selected;
+    }
+
+    private TeamMember memberByName(String root, String value) {
+        for (TeamMember member : membersByRoot.getOrDefault(root, new CopyOnWriteArrayList<>())) {
+            if (member.name().equals(value) || member.id().equals(value)) {
+                return member;
+            }
+        }
+        throw new IllegalArgumentException("unknown team member: " + value);
+    }
+
+    private TeamMember member(AgentRun actor) {
+        TeamMember member = membersById.get(actor.id());
+        if (member == null) throw new IllegalArgumentException("not a team member: " + actor.id());
+        return member;
+    }
+
+    private String uniqueName(String root, String requested) {
+        String seed = requested == null || requested.isBlank() ? "agent" : requested.trim().toLowerCase()
+                .replaceAll("[^a-z0-9-]", "-").replaceAll("-+", "-").replaceAll("(^-|-$)", "");
+        if (seed.isBlank()) seed = "agent";
+        if (seed.length() > 32) seed = seed.substring(0, 32);
+        String base = seed;
+        int n = 1;
+        while (nameExists(root, seed) || seed.equals("lead")) {
+            seed = base + "-" + n++;
+        }
+        return seed;
+    }
+
+    private boolean nameExists(String root, String name) {
+        return membersByRoot.getOrDefault(root, new CopyOnWriteArrayList<>()).stream()
+                .anyMatch(m -> m.name().equals(name));
+    }
+
+    private boolean ready(String root, TeamTask task) {
+        for (String id : task.blockedBy()) {
+            Optional<TeamTask> blocker = store.find(root, id);
+            if (blocker.isEmpty() || blocker.get().status() != TeamTaskStatus.COMPLETED) return false;
+        }
+        return true;
+    }
+
+    private String requireEnabledRoot(AgentRun actor) {
+        String root = rootFor(actor);
+        if (root == null) throw new IllegalArgumentException("not a team-capable session");
+        if (!enabled(root)) throw new IllegalStateException("team mode is disabled for this session");
+        return root;
+    }
+
+    private Object lock(String root) {
+        return rootLocks.computeIfAbsent(root, ignored -> new Object());
+    }
+
+    private static List<String> safe(List<String> values) {
+        return values == null ? List.of() : values.stream().filter(v -> v != null && !v.isBlank()).map(String::trim).toList();
+    }
+
+    private static List<String> normalizeScopes(List<String> values) {
+        if (values == null) return List.of();
+        List<String> result = new ArrayList<>();
+        for (String value : values) {
+            if (value == null || value.isBlank()) continue;
+            String path = value.replace('\\', '/').trim().replaceAll("^/+", "");
+            if (path.contains("..")) throw new IllegalArgumentException("write scope cannot contain ..");
+            if (!result.contains(path)) result.add(path);
+        }
+        return List.copyOf(result);
+    }
+
+    private Map<String, Object> memberView(TeamMember member) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", member.id());
+        map.put("name", member.name());
+        map.put("rootRunId", member.rootRunId());
+        map.put("parentRunId", member.parentRunId());
+        map.put("running", member.running());
+        map.put("currentTask", member.currentTask());
+        map.put("lastResult", member.lastResult());
+        map.put("lastError", member.lastError());
+        map.put("status", member.run().state().snapshot().status());
+        PermissionRequest pending = member.run().permissions().pendingFor(member.id());
+        map.put("pendingPermission", pending == null ? null : pending.publicView());
+        return map;
+    }
+
+    @Override
+    public void close() {
+        closed = true;
+        for (TeamMember member : membersById.values()) {
+            member.close();
+        }
+        executor.shutdownNow();
+        try {
+            store.close();
+        } catch (Exception ignored) {
+        }
+    }
+}

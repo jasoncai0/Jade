@@ -486,6 +486,32 @@ The Memory dialog lists, exports, and deletes memories. `GET /api/memory` and
 `GET /api/memory/export` return the current project scope; `DELETE
 /api/memory/{id}` removes one. Health is at `GET /api/memory/health`.
 
+## Team and TeamBoard
+
+Team mode turns a root session into a small agent team. It is **off by
+default** and is enabled per session from the Team dialog or
+`POST /api/runs/{id}/team`. Teammates share the root workspace, run in the
+background, and have write/compile/run tools; the Lead keeps final
+verification and approves child permission requests.
+
+```bash
+AGENT_TEAM_ENABLED=false   # default for new root sessions; toggle per session
+```
+
+The board is MySQL-backed (`jade_teams`, `jade_team_tasks`). Tasks have
+`pending/in_progress/completed/deleted` status, revision-checked updates,
+blocked-by dependencies, optional owner, and advisory write scopes. The eight
+team tools are registered only while team mode is on:
+`team_task_create`, `team_task_list`, `team_task_get`, `team_task_update`,
+`team_spawn`, `list_agents`, `send_message`, `wait_agent`. Task changes do not
+wake a teammate; messages do. The `Team` dialog is a read-only board with
+members, task state, pending child approvals, and the enable toggle.
+
+Team children share the workspace and are intentionally hidden from the
+top-level session rail. Members are runtime-only: after a server restart, the
+task board and enabled flag are restored from MySQL, but teammate processes are
+not (the same cold-member limitation as the reference implementation).
+
 ## HTTP API
 
 All JSON responses use:
@@ -502,6 +528,10 @@ Errors use the HTTP status as `code` and `data: null`.
 | GET | `/api/config` | non-secret runtime configuration |
 | GET | `/api/tools` | registered tools and JSON schemas |
 | GET | `/api/mcp` | MCP server status and discovered tool count |
+| GET | `/api/runs/{id}/team` | team state, members, tasks, pending approvals |
+| POST | `/api/runs/{id}/team` | toggle `{enabled}` for this session |
+| GET | `/api/runs/{id}/team/tasks/{taskId}` | one team task |
+| POST | `/api/runs/{id}/team/permissions/{requestId}` | Lead resolves `{decision, scope}` |
 | GET | `/api/memory/health` | Mem0 sidecar health and mode |
 | GET | `/api/memory` | project-scoped memories |
 | GET | `/api/memory/export` | export project memories as JSON |
@@ -610,6 +640,7 @@ Environment variables take precedence over `.env`:
 | `AGENT_SKILLS_DIR` | `skills` | skill root |
 | `AGENT_SKILL_PRELOAD` | `true` | preload top-2 skill bodies (≤4,000 chars each); `false` = catalog only, load on demand |
 | `AGENT_WORKSPACES_DIR` | `agent-workspaces` | run root |
+| `AGENT_TEAM_ENABLED` | `false` | default for new root sessions; per-session toggle |
 | `AGENT_MEMORY_MODE` | `on` | `on`, `shadow`, or `off`; missing sidecar falls back to no-op |
 | `AGENT_MEMORY_URL` | `http://127.0.0.1:8888` | Mem0 OSS REST endpoint |
 | `AGENT_MEMORY_PROVIDER` | `mem0-oss` | provider label |
@@ -628,7 +659,7 @@ Environment variables take precedence over `.env`:
 mvn test
 ```
 
-The suite has 149 tests:
+The suite has 161 tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling
@@ -648,9 +679,11 @@ The suite has 149 tests:
   token-budget stop, and an explicit positive turn cap
 - command sandbox write denial and SDK-directory exclusion
 - HTTP API and SSE replay against a real local server and a fake model
+- Team task CAS/dependencies/toggle, team spawn/wait/follow-up, and team API toggle
 - Mem0 HTTP health/recall/write, API key propagation, scoped selection, secret rejection, and prompt-block replacement
 - MySQL/MyBatis event-store pagination, compact LLM bodies, full-payload lookup, and batch import
   (skipped automatically when the Docker MySQL instance is not running)
+- team children are hidden from the top-level run list
 - restart retention: a finished run is reloaded with its events, transcript, and files;
   an interrupted run is restored as `FAILED`
 
