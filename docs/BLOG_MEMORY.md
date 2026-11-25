@@ -87,6 +87,7 @@
 
 | 2026-11-24 16:37 | 标注偏好/项目约定的精确命中行号 | 11.1 节可见 7 个 GitHub 行链接 | blog commit `9ca5f23`；备份 `/home/ubuntu/backups/blog-20261124-163704` |
 | 2026-11-26 01:13 | 补充 Team wait_agent 超时语义 | 文章 200，8.4 节可见 | blog commit `039fa9d`；备份 `/home/ubuntu/backups/blog-20261126-011333` |
+| 2026-11-26 01:21 | 补充 Team wait_agent 权限等待死锁 | 文章 200，8.4 节可见 | blog commit `9987b97`；备份 `/home/ubuntu/backups/blog-20261126-012125` |
 
 ## 待办
 
