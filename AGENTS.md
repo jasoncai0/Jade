@@ -67,6 +67,7 @@ MySQL 用 `docker compose up -d`；数据库 `jade`，端口 `127.0.0.1:3307`。
 - `docker/mem0/`：Mem0 OSS + FastEmbed BGE sidecar。
 - `docs/CODE-REVIEW-2026-11-18.md`：全量走查、P0/P1/P2 TODO。
 - `docs/superpowers/specs/2026-11-25-agent-team-design.md`：Team/TeamBoard 最终设计与验收标准。
+- `docs/TEAM.md`：Team/TeamBoard 最终实现（架构、MySQL/CAS、生命周期、时序、核心代码、限制）。
 
 ## 博客踩坑记忆
 
