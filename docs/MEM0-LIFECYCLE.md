@@ -2,11 +2,17 @@
 
 | 字段 | 值 |
 |---|---|
-| 状态 | 当前实现 + 后续设计 |
-| 日期 | 2026-11-24 |
-| 实现 | `memory/`、`AgentLoop.maybeWriteMemory`、`/api/memory/*` |
+| 状态 | 已升级至混合准入 v2 + Pending 审批箱 + TTL / `supersedes`（2026-11-27） |
+| 日期 | 2026-11-27 |
+| 实现 | `memory/`、`memory/admission/`、`MemoryBridge`、`/api/memory/*`、`/api/memory/pending/*` |
 | 设计 | `docs/superpowers/specs/2026-11-23-mem0-memory-design.md`（准入 v2 见 §16） |
-| 验收 | `docs/MEM0-SIDECAR-REPORT.md` |
+| 验收 | `docs/MEM0-SIDECAR-REPORT.md`、`MemoryAdmissionPipelineTest` |
+
+> **2026-11-27 实现更新摘要**：下文记录的 v1 缺口已通过 `io.github.jasoncai0.agent.memory.admission.*` 补齐：
+> 1. **混合准入管线（`AGENT_MEMORY_ADMISSION=hybrid`）**：本轮最多 4 条用户消息（≤6,000 字符）先经 `DeterministicAdmissionFilter` 拦截密钥与推迟噪音（如“以后再说”），再调用 `LlmMemoryAdmission` 的 `emit_memory` strict tool 产出规范化单句结论；
+> 2. **原文子串证据门禁（`EvidenceVerifier`）**：自动写入强制要求 `evidence.quote` 逐字匹配本轮 `userMessages[messageIndex]`；捏造引文直接丢弃；`verification` / `assistant` 来源证据封顶进入 Pending 审批箱；
+> 3. **双层落库与 `infer=false`**：`confidence >= 0.85` 且属 `preference` / `project_fact` 以 `infer=false` 直写 Mem0；`0.60..0.85` 或 `decision` / `pitfall` / `command_recipe` 落入 `jade_memory_pending`（Web Memory 弹窗 `Active / Pending` 双标签 + `POST /api/memory/pending/{id}/approve|reject`）；
+> 4. **TTL、`supersedes` 与复合召回排序**：按 `kind` 写入 `expires_at_ms`（`preference` 不过期，`decision`/`project_fact` 90 天，`pitfall` 180 天，`command_recipe` 30 天），冲突旧条目标记/清理 `supersedes`，`MemoryPolicy.select()` 过滤过期/被替代条目并按 `0.7 * semantic_score + 0.2 * recency + 0.1 * confidence` 排序。
 
 ## 1. 先给结论
 

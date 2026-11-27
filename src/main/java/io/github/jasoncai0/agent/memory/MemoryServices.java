@@ -22,7 +22,8 @@ public final class MemoryServices {
         if (!safe.active()) {
             return new NoopMemoryService(safe.mode(),
                     MemoryHealth.disabled(safe.mode().id(),
-                            safe.mode() == MemoryMode.OFF ? "memory mode off" : "memory URL is empty"));
+                            safe.mode() == MemoryMode.OFF ? "memory mode off" : "memory URL is empty"),
+                    safe, workspacesRoot);
         }
         Mem0HttpMemoryService client = new Mem0HttpMemoryService(safe, workspacesRoot);
         MemoryHealth health = client.health();
@@ -34,6 +35,7 @@ public final class MemoryServices {
         Log.warn("memory.unavailable", Map.of("endpoint", safe.baseUrl(), "reason", health.message()));
         return new NoopMemoryService(safe.mode(),
                 new MemoryHealth(false, health.provider(), safe.mode().id(),
-                        health.endpoint(), health.message(), health.latencyMs()));
+                        health.endpoint(), health.message(), health.latencyMs()),
+                safe, workspacesRoot);
     }
 }

@@ -70,6 +70,10 @@ public final class ToolContext {
         return verifier;
     }
 
+    public io.github.jasoncai0.agent.workspace.CommandRunner commandRunner() {
+        return verifier == null ? new io.github.jasoncai0.agent.workspace.CommandRunner() : verifier.runner();
+    }
+
     public String runId() {
         return runId;
     }

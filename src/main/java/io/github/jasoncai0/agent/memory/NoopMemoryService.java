@@ -7,10 +7,19 @@ import java.util.List;
 public final class NoopMemoryService implements MemoryService {
     private final MemoryMode mode;
     private final MemoryHealth health;
+    private final MemorySettings settings;
+    private final Path workspacesRoot;
 
     public NoopMemoryService(MemoryMode mode, MemoryHealth health) {
+        this(mode, health, MemorySettings.defaults(), null);
+    }
+
+    public NoopMemoryService(MemoryMode mode, MemoryHealth health,
+                             MemorySettings settings, Path workspacesRoot) {
         this.mode = mode == null ? MemoryMode.OFF : mode;
         this.health = health == null ? MemoryHealth.disabled(this.mode.id(), "memory disabled") : health;
+        this.settings = settings == null ? MemorySettings.defaults() : settings;
+        this.workspacesRoot = workspacesRoot;
     }
 
     public static NoopMemoryService off() {
@@ -30,7 +39,7 @@ public final class NoopMemoryService implements MemoryService {
 
     @Override
     public MemoryScope scope(Path workspace, String sessionId) {
-        return MemoryPolicy.scope(MemorySettings.defaults(), workspace, sessionId);
+        return MemoryPolicy.scope(settings, workspace, workspacesRoot, sessionId);
     }
 
     @Override

@@ -18,10 +18,20 @@ public record CliOptions(
         boolean help,
         boolean version,
         PermissionMode permissionMode,
-        boolean dangerouslySkipPermissions
+        boolean dangerouslySkipPermissions,
+        Integer keepCount,
+        Integer olderThanDays,
+        boolean dryRun
 ) {
+    public CliOptions(Mode mode, String task, String taskFile, String workspace, Integer maxSteps,
+                      Integer port, String host, boolean help, boolean version,
+                      PermissionMode permissionMode, boolean dangerouslySkipPermissions) {
+        this(mode, task, taskFile, workspace, maxSteps, port, host, help, version,
+                permissionMode, dangerouslySkipPermissions, null, null, false);
+    }
+
     public enum Mode {
-        SERVE, TASK, CHECK, PING
+        SERVE, TASK, CHECK, PING, PRUNE
     }
 
     public static CliOptions parse(String[] args) {
@@ -35,6 +45,10 @@ public record CliOptions(
         boolean version = false;
         boolean check = false;
         boolean ping = false;
+        boolean prune = false;
+        Integer keepCount = null;
+        Integer olderThanDays = null;
+        boolean dryRun = false;
         PermissionMode permissionMode = null;
         boolean dangerouslySkipPermissions = false;
 
@@ -53,6 +67,16 @@ public record CliOptions(
                 case "--version", "-V" -> version = true;
                 case "--check" -> check = true;
                 case "--ping" -> ping = true;
+                case "--prune" -> prune = true;
+                case "--dry-run" -> dryRun = true;
+                case "--keep" -> {
+                    String value = inline != null ? inline : requireValue(list, ++i, name);
+                    keepCount = integer(name, value, 0, 100_000);
+                }
+                case "--older-than-days" -> {
+                    String value = inline != null ? inline : requireValue(list, ++i, name);
+                    olderThanDays = integer(name, value, 0, 3_650);
+                }
                 case "--task" -> {
                     String value = inline != null ? inline : requireValue(list, ++i, name);
                     task = value;
@@ -88,11 +112,12 @@ public record CliOptions(
 
         if (help || version) {
             return new CliOptions(Mode.SERVE, task, taskFile, workspace, maxSteps, port, host, help, version,
-                    permissionMode, dangerouslySkipPermissions);
+                    permissionMode, dangerouslySkipPermissions, keepCount, olderThanDays, dryRun);
         }
-        int modes = (check ? 1 : 0) + (ping ? 1 : 0) + (task != null || taskFile != null ? 1 : 0);
+        int modes = (check ? 1 : 0) + (ping ? 1 : 0) + (prune ? 1 : 0)
+                + (task != null || taskFile != null ? 1 : 0);
         if (modes > 1) {
-            throw new IllegalArgumentException("--check, --ping, and --task/--task-file cannot be combined");
+            throw new IllegalArgumentException("--check, --ping, --prune, and --task/--task-file cannot be combined");
         }
         if (task != null && taskFile != null) {
             throw new IllegalArgumentException("Use either --task or --task-file, not both");
@@ -109,7 +134,7 @@ public record CliOptions(
                 throw new IllegalArgumentException("--workspace must not be blank");
             }
         }
-        Mode mode = check ? Mode.CHECK : ping ? Mode.PING
+        Mode mode = check ? Mode.CHECK : ping ? Mode.PING : prune ? Mode.PRUNE
                 : (task != null || taskFile != null) ? Mode.TASK : Mode.SERVE;
         if (dangerouslySkipPermissions && permissionMode != null) {
             throw new IllegalArgumentException(
@@ -119,7 +144,7 @@ public record CliOptions(
             permissionMode = PermissionMode.BYPASS;
         }
         return new CliOptions(mode, task, taskFile, workspace, maxSteps, port, host, false, false,
-                permissionMode, dangerouslySkipPermissions);
+                permissionMode, dangerouslySkipPermissions, keepCount, olderThanDays, dryRun);
     }
 
     private static String requireValue(List<String> args, int index, String option) {
@@ -163,6 +188,10 @@ public record CliOptions(
                   --dangerously-skip-permissions  explicit bypass; dangerous
                   --check                validate config, JDK, tools, and skills
                   --ping                 make one small DeepSeek request
+                  --prune                archive and remove old finished sessions
+                  --keep <n>             sessions to keep during --prune (default 200)
+                  --older-than-days <d>  prune finished sessions older than <d> days (default 30)
+                  --dry-run              preview --prune without deleting workspaces or DB rows
                   --version              print the version
                   --help                 print this help
 

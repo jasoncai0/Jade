@@ -1,8 +1,5 @@
 package io.github.jasoncai0.agent.agent;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jasoncai0.agent.config.AgentSettings;
 import io.github.jasoncai0.agent.config.Log;
 import io.github.jasoncai0.agent.llm.ChatMessage;
@@ -10,15 +7,12 @@ import io.github.jasoncai0.agent.llm.ChatRequest;
 import io.github.jasoncai0.agent.llm.ChatResult;
 import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.llm.LlmException;
+import io.github.jasoncai0.agent.llm.Role;
 import io.github.jasoncai0.agent.llm.ToolCall;
-import io.github.jasoncai0.agent.memory.MemoryCandidate;
 import io.github.jasoncai0.agent.memory.MemoryContext;
-import io.github.jasoncai0.agent.memory.MemoryItem;
-import io.github.jasoncai0.agent.memory.MemoryMode;
-import io.github.jasoncai0.agent.memory.MemoryPolicy;
-import io.github.jasoncai0.agent.memory.MemoryScope;
 import io.github.jasoncai0.agent.memory.MemoryService;
 import io.github.jasoncai0.agent.memory.NoopMemoryService;
+import io.github.jasoncai0.agent.memory.admission.MemoryAdmissionPipeline;
 import io.github.jasoncai0.agent.permission.PermissionResult;
 import io.github.jasoncai0.agent.permission.PermissionSession;
 import io.github.jasoncai0.agent.question.QuestionBroker;
@@ -26,25 +20,21 @@ import io.github.jasoncai0.agent.skill.Skill;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.tool.ToolContext;
 import io.github.jasoncai0.agent.tool.ToolRegistry;
-import io.github.jasoncai0.agent.tool.ToolResult;
 import io.github.jasoncai0.agent.workspace.Workspace;
-import io.github.jasoncai0.agent.workspace.WorkspaceException;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 /**
- * One run of the agent. Every model turn executes the same ten phases. Turn
- * count is unlimited by default; a positive AgentSettings.maxSteps is an
- * optional cap, and a token budget plus repeated-call guard bound long runs.
+ * One run of the agent. Every model turn executes the same ten phases.
+ * Streaming throttling, prompt assembly, tool batch execution, and memory
+ * bridge logic live in dedicated package-private collaborators.
  */
 public final class AgentLoop {
-    private static final ObjectMapper JSON = new ObjectMapper();
-    private static final int MAX_TOOL_OUTPUT_CHARS = 30_000;
-
     private final LlmClient llm;
     private final ToolRegistry tools;
     private final SkillRegistry skills;
@@ -55,10 +45,11 @@ public final class AgentLoop {
     private final PermissionSession permissionSession;
     private final QuestionBroker questionBroker;
     private final GoalReviewer goalReviewer;
-    private final MemoryService memory;
+    private final ToolBatchExecutor toolExecutor;
+    private final MemoryService memoryService;
+    private volatile MemoryBridge memoryBridge;
     private final ContextCompactor compactor = new ContextCompactor();
     private final ToolLoopGuard loopGuard = new ToolLoopGuard();
-    /** Live delta sink; null means nobody is watching, so deltas are dropped. */
     private volatile LiveDeltaBus liveDeltas;
     private volatile String teamPolicy = "";
 
@@ -111,130 +102,26 @@ public final class AgentLoop {
         this.permissionSession = permissionSession == null ? new PermissionSession() : permissionSession;
         this.questionBroker = questionBroker == null ? new QuestionBroker() : questionBroker;
         this.goalReviewer = goalReviewer == null ? GoalReviewer.NOOP : goalReviewer;
-        this.memory = memory == null ? NoopMemoryService.off() : memory;
+        this.toolExecutor = new ToolBatchExecutor(tools, settings);
+        this.memoryService = memory == null ? NoopMemoryService.off() : memory;
+        this.memoryBridge = new MemoryBridge(this.memoryService, llm);
     }
 
-    /** Adds the team coordination contract to the system prompt. */
+    public AgentLoop withMemoryPipeline(MemoryAdmissionPipeline pipeline) {
+        if (pipeline != null) {
+            this.memoryBridge = new MemoryBridge(this.memoryService, llm, pipeline);
+        }
+        return this;
+    }
+
     public AgentLoop withTeamPolicy(String policy) {
         this.teamPolicy = policy == null ? "" : policy;
         return this;
     }
 
-    /** Routes streaming deltas to a live bus (browser SSE). Optional. */
     public AgentLoop withLiveDeltas(LiveDeltaBus bus) {
         this.liveDeltas = bus;
         return this;
-    }
-
-    /**
-     * Streams one model request. Deltas are advisory: on failure they are
-     * discarded, so a half-streamed answer never looks complete.
-     */
-    private ChatResult streamModel(ChatRequest request) {
-        LiveDeltaBus bus = liveDeltas;
-        if (bus == null) {
-            return llm.stream(request, LlmClient.StreamListener.noop());
-        }
-        DeltaThrottle throttle = new DeltaThrottle(bus);
-        ChatResult result;
-        try {
-            result = llm.stream(request, throttle);
-        } catch (RuntimeException e) {
-            throttle.discard();
-            bus.finish();
-            throw e;
-        }
-        throttle.flush();
-        bus.finish();
-        return result;
-    }
-
-    /**
-     * Coalesces token deltas into chunks before they hit the SSE connection:
-     * at most one frame per {@value #DELTA_INTERVAL_MS} ms or per
-     * {@value #DELTA_CHUNK_CHARS} characters, whichever comes first.
-     */
-    private static final class DeltaThrottle implements LlmClient.StreamListener {
-        private static final long DELTA_INTERVAL_MS = 50;
-        private static final int DELTA_CHUNK_CHARS = 512;
-
-        private final LiveDeltaBus bus;
-        private final StringBuilder text = new StringBuilder();
-        private final StringBuilder reasoning = new StringBuilder();
-        private long lastFlush = System.currentTimeMillis();
-
-        private DeltaThrottle(LiveDeltaBus bus) {
-            this.bus = bus;
-        }
-
-        @Override
-        public void onText(String delta) {
-            if (delta == null || delta.isEmpty()) {
-                return;
-            }
-            synchronized (this) {
-                text.append(delta);
-            }
-            maybeFlush();
-        }
-
-        @Override
-        public void onReasoning(String delta) {
-            if (delta == null || delta.isEmpty()) {
-                return;
-            }
-            synchronized (this) {
-                reasoning.append(delta);
-            }
-            maybeFlush();
-        }
-
-        @Override
-        public void onToolCallDelta(int index, String id, String name, String argumentsDelta) {
-            // Tool arguments are not rendered live; they land in the durable log.
-        }
-
-        @Override
-        public void onUsage(io.github.jasoncai0.agent.llm.Usage usage) {
-            // Usage lands in the durable log with the finished assistant message.
-        }
-
-        private void maybeFlush() {
-            long now = System.currentTimeMillis();
-            synchronized (this) {
-                int pending = text.length() + reasoning.length();
-                if (pending == 0) {
-                    return;
-                }
-                if (pending >= DELTA_CHUNK_CHARS || now - lastFlush >= DELTA_INTERVAL_MS) {
-                    flushLocked();
-                }
-            }
-        }
-
-        void flush() {
-            synchronized (this) {
-                flushLocked();
-            }
-        }
-
-        void discard() {
-            synchronized (this) {
-                text.setLength(0);
-                reasoning.setLength(0);
-            }
-        }
-
-        private void flushLocked() {
-            if (text.length() == 0 && reasoning.length() == 0) {
-                return;
-            }
-            bus.publish(text.length() == 0 ? "" : text.toString(),
-                    reasoning.length() == 0 ? null : reasoning.toString());
-            text.setLength(0);
-            reasoning.setLength(0);
-            lastFlush = System.currentTimeMillis();
-        }
     }
 
     public RunSnapshot run(String task, Workspace workspace, RunState state,
@@ -248,31 +135,32 @@ public final class AgentLoop {
                 "taskChars", task.length()
         ));
         log.emit("run.started", eventMap("snapshot", state.snapshot()));
-        String memoryBlock = recallMemory(task, workspace, state, log);
-        String system = buildSystemPrompt(task, workspace, selected);
-        if (!memoryBlock.isBlank()) system = system + "\n\n" + memoryBlock;
+        String memoryBlock = memoryBridge.recall(task, workspace, state, log);
+        String system = SystemPromptBuilder.buildSystemPrompt(
+                settings, skills, teamPolicy, task, workspace, selected);
+        if (!memoryBlock.isBlank()) {
+            system = system + "\n\n" + memoryBlock;
+        }
         messages.add(ChatMessage.system(system));
-        messages.add(ChatMessage.user(buildInitialUserMessage(task, workspace)));
-        return runTurn(task, workspace, state, log, control, messages, selected, false, task);
+        messages.add(ChatMessage.user(SystemPromptBuilder.buildInitialUserMessage(task, workspace)));
+        return runTurn(task, workspace, state, log, control, messages, selected, List.of(task));
     }
 
-    /**
-     * Continues an existing session with a new user message. The previous
-     * conversation is kept, the workspace is reused, and the same event log
-     * gets new events with monotonically increasing sequence numbers.
-     */
     public RunSnapshot continueSession(String message, List<ChatMessage> history,
-                                      Workspace workspace, RunState state,
-                                      RunEventLog log, RunControl control) {
+                                       Workspace workspace, RunState state,
+                                       RunEventLog log, RunControl control) {
         state.beginTurn();
         List<Skill> selected = skills.select(message, 2);
         List<ChatMessage> messages = new ArrayList<>(history);
-        if (messages.isEmpty() || messages.get(0).role() != io.github.jasoncai0.agent.llm.Role.SYSTEM) {
-            messages.add(0, ChatMessage.system(buildSystemPrompt(state.task(), workspace, selected)));
+        if (messages.isEmpty() || messages.get(0).role() != Role.SYSTEM) {
+            messages.add(0, ChatMessage.system(SystemPromptBuilder.buildSystemPrompt(
+                    settings, skills, teamPolicy, state.task(), workspace, selected)));
         }
-        String memoryQuery = memoryQuery(message, messages);
-        String memoryBlock = recallMemory(memoryQuery, workspace, state, log);
-        if (!memoryBlock.isBlank()) messages = MemoryContext.inject(messages, memoryBlock);
+        String memoryQuery = MemoryBridge.buildRecallQuery(message, messages);
+        String memoryBlock = memoryBridge.recall(memoryQuery, workspace, state, log);
+        if (!memoryBlock.isBlank()) {
+            messages = MemoryContext.inject(messages, memoryBlock);
+        }
         messages.add(ChatMessage.user(message));
         Log.info("agent.turn.start", Map.of(
                 "runId", state.id(),
@@ -281,13 +169,13 @@ public final class AgentLoop {
                 "messages", messages.size()
         ));
         log.emit("turn.started", eventMap("message", message, "snapshot", state.snapshot()));
-        return runTurn(state.task(), workspace, state, log, control, messages, selected, true, message);
+        return runTurn(state.task(), workspace, state, log, control, messages, selected, List.of(message));
     }
 
     private RunSnapshot runTurn(String task, Workspace workspace, RunState state,
                                 RunEventLog log, RunControl control,
                                 List<ChatMessage> messages, List<Skill> selected,
-                                boolean continuation, String userMessage) {
+                                List<String> initialTurnMessages) {
         ToolContext context = new ToolContext(workspace, settings, skills, state, verifier,
                 state.id(), log, questionBroker, control);
         ToolOutputStore spill = new ToolOutputStore(workspace.root());
@@ -295,10 +183,10 @@ public final class AgentLoop {
         PermissionManager permissions = new PermissionManager(settings.permissionMode(), permissionSession,
                 permissionBroker, state, log, control, workspace);
         loopGuard.reset();
+        List<String> turnUserMessages = new ArrayList<>(initialTurnMessages);
 
         try {
             boolean completed = false;
-            int totalToolCalls = 0;
             int noProgressTurns = 0;
             boolean reflectionRequested = false;
             int goalReviewAttempts = 0;
@@ -331,8 +219,7 @@ public final class AgentLoop {
                         state.plan().size() + " plan item(s)");
                 state.setPhase(AgentPhase.PLAN, cycle);
 
-                phase(state, log, AgentPhase.MODEL, cycle,
-                        "asking the model for the next action");
+                phase(state, log, AgentPhase.MODEL, cycle, "asking the model for the next action");
                 ChatRequest request = new ChatRequest(messages, tools.specs(), 0.2, maxOutputTokens);
                 String requestBody = llm.requestBody(request, true);
                 if (requestBody != null && !requestBody.isBlank()) {
@@ -350,9 +237,8 @@ public final class AgentLoop {
 
                 boolean hasCalls = !result.toolCalls().isEmpty();
                 boolean truncated = "length".equalsIgnoreCase(result.finishReason());
-                ChatMessage assistant = ChatMessage.assistant(
-                        result.content(), result.reasoningContent(), result.toolCalls());
-                messages.add(assistant);
+                messages.add(ChatMessage.assistant(
+                        result.content(), result.reasoningContent(), result.toolCalls()));
                 log.emit("assistant", eventMap(
                         "content", result.content(),
                         "reasoning", result.reasoningContent(),
@@ -372,7 +258,7 @@ public final class AgentLoop {
                         }
                     }
                     if (loopReason != null) {
-                        rejectToolCalls(result.toolCalls(), messages, loopReason, "loop", state, log);
+                        ToolBatchExecutor.rejectToolCalls(result.toolCalls(), messages, loopReason, "loop", log);
                         state.loopDetected(loopReason);
                         log.emit("loop.detected", eventMap("message", loopReason, "usage", state.usage()));
                         break;
@@ -383,14 +269,13 @@ public final class AgentLoop {
                                 + " was exhausted (" + state.usage().totalTokens() + " tokens). "
                                 + "The workspace and transcript are preserved; raise AGENT_TOKEN_BUDGET "
                                 + "or send a follow-up to continue.";
-                        rejectToolCalls(result.toolCalls(), messages, message, "budget", state, log);
+                        ToolBatchExecutor.rejectToolCalls(result.toolCalls(), messages, message, "budget", log);
                         state.budgetExceeded(message);
                         log.emit("budget.exceeded", eventMap("message", message,
                                 "budget", settings.tokenBudget(), "usage", state.usage()));
                         break;
                     }
-                    totalToolCalls += result.toolCalls().size();
-                    executeTools(result.toolCalls(), messages, context, state, log, control, stats, permissions, spill);
+                    toolExecutor.execute(result.toolCalls(), messages, context, state, log, control, stats, permissions, spill);
                     boolean madeProgress = !state.files().equals(filesBefore)
                             || (!verifiedBefore && context.verified());
                     if (madeProgress) {
@@ -518,7 +403,7 @@ public final class AgentLoop {
                             continue;
                         }
                     }
-                    maybeWriteMemory(userMessage, workspace, state, log);
+                    memoryBridge.maybeWrite(task, turnUserMessages, answer, workspace, state, log);
                     state.succeed(answer);
                     log.emit("run.succeeded", eventMap("answer", answer, "usage", state.usage()));
                     completed = true;
@@ -562,8 +447,6 @@ public final class AgentLoop {
             RunSnapshot snapshot = state.snapshot();
             log.emit("run.finished", eventMap("snapshot", snapshot));
             try {
-                // Persist once more so a restarted process can replay the final
-                // run.finished event, not just the earlier checkpoint.
                 persistArtifacts(workspace, state, messages, log);
             } catch (RuntimeException e) {
                 Log.warn("agent.artifacts.final_failed", Map.of(
@@ -579,331 +462,13 @@ public final class AgentLoop {
         return state.snapshot();
     }
 
-    private String memoryQuery(String latest, List<ChatMessage> history) {
-        StringBuilder query = new StringBuilder(latest == null ? "" : latest.strip());
-        int seen = 0;
-        for (int i = history.size() - 1; i >= 0 && seen < 2; i--) {
-            ChatMessage message = history.get(i);
-            if (message.role() == io.github.jasoncai0.agent.llm.Role.USER
-                    && message.content() != null && !message.content().isBlank()) {
-                query.append("\n").append(message.content().strip());
-                seen++;
-            }
-        }
-        String text = query.toString();
-        return text.length() <= 2_000 ? text : text.substring(0, 2_000);
-    }
-
-    /**
-     * Recall is advisory and fail-soft: a missing or slow sidecar must never
-     * change the run outcome. Shadow mode logs candidates but injects nothing.
-     */
-    private String recallMemory(String query, Workspace workspace, RunState state, RunEventLog log) {
-        MemoryService service = memory;
-        if (service == null || !service.health().available() || !service.mode().active()) {
-            return "";
-        }
-        MemoryScope scope = service.scope(workspace.root(), state.id());
-        String clean = query == null ? "" : query.strip();
-        if (clean.isBlank()) return "";
-        long start = System.nanoTime();
-        String hash = MemoryContext.queryHash(clean);
-        log.emit("memory.recall.started", eventMap(
-                "queryHash", hash,
-                "queryChars", clean.length(),
-                "mode", service.mode().id()
-        ));
-        try {
-            List<MemoryItem> candidates = service.recall(clean, scope, MemoryPolicy.MAX_RECALL);
-            List<MemoryItem> selected = MemoryPolicy.select(candidates, scope);
-            long latency = (System.nanoTime() - start) / 1_000_000;
-            log.emit("memory.recall.completed", eventMap(
-                    "queryHash", hash,
-                    "candidateCount", candidates.size(),
-                    "selectedCount", selected.size(),
-                    "latencyMs", latency,
-                    "topScore", selected.isEmpty() ? 0.0 : selected.get(0).score(),
-                    "hit", !selected.isEmpty()
-            ));
-            if (service.mode() == MemoryMode.SHADOW || selected.isEmpty()) {
-                return "";
-            }
-            String block = MemoryContext.block(selected);
-            long globals = selected.stream().filter(MemoryItem::global).count();
-            log.emit("memory.injected", eventMap(
-                    "memoryIds", selected.stream().map(MemoryItem::id).toList(),
-                    "count", selected.size(),
-                    "globalCount", globals,
-                    "tokens", MemoryContext.tokenEstimate(block)
-            ));
-            return block;
-        } catch (RuntimeException e) {
-            Log.warn("memory.recall.failed", Map.of("runId", state.id(),
-                    "error", String.valueOf(e.getMessage())));
-            log.emit("memory.recall.failed", eventMap(
-                    "queryHash", hash,
-                    "reason", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()
-            ));
-            return "";
-        }
-    }
-
-    /** Writes only explicit user preferences/decisions, and never blocks the turn. */
-    private void maybeWriteMemory(String userMessage, Workspace workspace, RunState state, RunEventLog log) {
-        MemoryService service = memory;
-        if (service == null || !service.health().available() || service.mode() != MemoryMode.ON) {
-            return;
-        }
-        MemoryScope scope = service.scope(workspace.root(), state.id());
-        MemoryCandidate candidate = MemoryPolicy.candidateFromUserMessage(userMessage, scope).orElse(null);
-        if (candidate == null) return;
-        log.emit("memory.write.queued", eventMap(
-                "kind", candidate.kind(),
-                "source", candidate.source(),
-                "infer", candidate.infer(),
-                "candidateChars", candidate.text().length()
-        ));
-        service.submitAsync(() -> {
-            long start = System.nanoTime();
-            try {
-                String id = service.remember(candidate, scope);
-                log.emit("memory.write.completed", eventMap(
-                        "memoryIds", id == null || id.isBlank() ? List.of() : List.of(id),
-                        "latencyMs", (System.nanoTime() - start) / 1_000_000
-                ));
-            } catch (RuntimeException e) {
-                log.emit("memory.write.failed", eventMap(
-                        "reason", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(),
-                        "latencyMs", (System.nanoTime() - start) / 1_000_000
-                ));
-            }
-        });
-    }
-
-    private void rejectToolCalls(List<ToolCall> calls, List<ChatMessage> messages, String reason,
-                                 String guard, RunState state, RunEventLog log) {
-        for (ToolCall call : calls) {
-            String output = "Blocked by " + guard + " guard: " + reason;
-            messages.add(ChatMessage.tool(call.id(), output));
-            log.emit("tool.start", eventMap(
-                    "id", call.id(),
-                    "name", call.name(),
-                    "arguments", call.arguments()
-            ));
-            log.emit("tool.end", eventMap(
-                    "id", call.id(),
-                    "name", call.name(),
-                    "ok", false,
-                    "output", output,
-                    "durationMs", 0L,
-                    "data", Map.of("guard", guard)
-            ));
-        }
-    }
-
-    private void executeTools(List<ToolCall> calls, List<ChatMessage> messages,
-                              ToolContext context, RunState state, RunEventLog log,
-                              RunControl control, int[] stats, PermissionManager permissions,
-                              ToolOutputStore spill) {
-        int limit = Math.min(calls.size(), settings.maxToolCallsPerStep());
-        List<PreparedCall> prepared = new ArrayList<>();
-        for (int i = 0; i < calls.size(); i++) {
-            control.checkCancelled();
-            ToolCall call = calls.get(i);
-            PreparedCall item = new PreparedCall(call);
-            prepared.add(item);
-            if (i >= limit) {
-                item.error = "Skipped: the limit is " + settings.maxToolCallsPerStep()
-                        + " tool calls per model turn. Ask for this tool again in the next turn.";
-                continue;
-            }
-            try {
-                item.args = parseArguments(call.arguments());
-            } catch (RuntimeException e) {
-                item.error = "Invalid JSON arguments: " + e.getMessage();
-                continue;
-            }
-            log.emit("tool.start", eventMap(
-                    "id", call.id(),
-                    "name", call.name(),
-                    "arguments", truncate(call.arguments(), 5000)
-            ));
-            item.permission = permissions.authorize(call.name(), item.args);
-            if (!item.permission.allowed()) {
-                item.error = "Permission denied: " + item.permission.reason();
-            }
-        }
-
-        long executable = prepared.stream().filter(PreparedCall::executable).count();
-        boolean canParallel = executable >= 2
-                && prepared.stream().filter(PreparedCall::executable)
-                        .allMatch(item -> tools.concurrencySafe(item.call.name())
-                                && !item.permission.networkAllowed());
-        if (canParallel) {
-            runParallel(prepared, context, control);
-        } else {
-            for (PreparedCall item : prepared) {
-                if (!item.executable()) {
-                    continue;
-                }
-                context.setNetworkAllowed(item.permission.networkAllowed());
-                long started = System.currentTimeMillis();
-                try {
-                    item.result = tools.execute(item.call.name(), item.args, context);
-                } finally {
-                    context.setNetworkAllowed(false);
-                }
-                item.duration = System.currentTimeMillis() - started;
-            }
-        }
-
-        for (PreparedCall item : prepared) {
-            if (!item.executable()) {
-                messages.add(ChatMessage.tool(item.call.id(),
-                        "ERROR " + item.call.name() + ": " + item.error));
-                log.emit("tool.end", eventMap("id", item.call.id(), "name", item.call.name(),
-                        "ok", false, "output", item.error, "durationMs", 0));
-                stats[1]++;
-                continue;
-            }
-            ToolResult result = item.result;
-            if (result == null) {
-                result = ToolResult.error("Tool " + item.call.name() + " was cancelled before it ran");
-            }
-            String output;
-            try {
-                ToolOutputRef ref = spill.save(state.id(), log.lastSeq(), item.call.name(), item.call.id(), result.output());
-                output = spill.inline(result.output(), ref);
-            } catch (WorkspaceException e) {
-                output = truncate(result.output(), MAX_TOOL_OUTPUT_CHARS)
-                        + "\n[spill failed: " + e.getMessage() + "]";
-            }
-            messages.add(ChatMessage.tool(item.call.id(),
-                    (result.ok() ? "OK " : "ERROR ") + item.call.name() + "\n" + output));
-            if (result.ok()) {
-                stats[0]++;
-            } else {
-                stats[1]++;
-            }
-            Map<String, Object> event = new LinkedHashMap<>();
-            event.put("id", item.call.id());
-            event.put("name", item.call.name());
-            event.put("ok", result.ok());
-            event.put("output", output);
-            event.put("durationMs", item.duration);
-            event.put("data", result.data());
-            log.emit("tool.end", event);
-            if (item.call.name().equals("update_plan")) {
-                log.emit("plan", eventMap("plan", state.plan()));
-            }
-            Log.info("agent.tool", Map.of(
-                    "runId", state.id(),
-                    "tool", item.call.name(),
-                    "ok", result.ok(),
-                    "durationMs", item.duration
-            ));
-        }
-        context.refreshFiles();
-        control.checkCancelled();
-    }
-
-    private void runParallel(List<PreparedCall> prepared, ToolContext context, RunControl control) {
-        List<PreparedCall> runnable = prepared.stream().filter(PreparedCall::executable).toList();
-        int workers = Math.min(4, runnable.size());
-        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(workers);
-        List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
-        try {
-            for (PreparedCall item : runnable) {
-                if (control.isCancelled()) {
-                    break;
-                }
-                futures.add(pool.submit(() -> {
-                    if (control.isCancelled()) {
-                        return;
-                    }
-                    long started = System.currentTimeMillis();
-                    try {
-                        item.result = tools.execute(item.call.name(), item.args, context);
-                    } catch (RuntimeException e) {
-                        item.result = ToolResult.error("Tool " + item.call.name() + " failed: " + e.getMessage());
-                    }
-                    item.duration = System.currentTimeMillis() - started;
-                }));
-            }
-            for (java.util.concurrent.Future<?> future : futures) {
-                try {
-                    future.get();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new RunControl.RunCancelledException();
-                } catch (java.util.concurrent.ExecutionException e) {
-                    throw new IllegalStateException("Parallel tool worker failed", e.getCause());
-                }
-            }
-        } finally {
-            pool.shutdown();
-            boolean interrupted = false;
-            while (!pool.isTerminated()) {
-                try {
-                    pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    interrupted = true;
-                }
-            }
-            if (interrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        control.checkCancelled();
-    }
-
-    private static final int MAX_PRELOADED_SKILL_CHARS = 4_000;
-
-    private String preloadedSkills(List<Skill> selected) {
-        if (!settings.preloadSkills()) {
-            return "(catalog-only mode; call load_skill with a name when a skill is relevant)";
-        }
-        if (selected.isEmpty()) {
-            return "(none pre-selected; use load_skill if needed)";
-        }
-        return String.join("\n\n", selected.stream().map(skill -> {
-            if (skill.body().length() <= MAX_PRELOADED_SKILL_CHARS) {
-                return skill.render();
-            }
-            return "### Skill: " + skill.name() + "\n" + skill.description()
-                    + "\n\n(full instructions are " + skill.body().length()
-                    + " chars; call load_skill to read them)";
-        }).toList());
-    }
-
-    private static final class PreparedCall {
-        private final ToolCall call;
-        private Map<String, Object> args;
-        private PermissionResult permission;
-        private String error;
-        private ToolResult result;
-        private long duration;
-
-        private PreparedCall(ToolCall call) {
-            this.call = call;
-        }
-
-        private boolean executable() {
-            return error == null && permission != null && permission.allowed();
-        }
-    }
-
-    /**
-     * Calls the model and, on a context-window rejection, compacts aggressively
-     * and retries exactly once. Any other failure keeps today's fail-fast path.
-     */
     private ChatResult requestModel(ChatRequest request, List<ChatMessage> messages,
                                     RunState state, RunEventLog log, RunControl control,
                                     int cycle) {
         boolean recovered = false;
         while (true) {
             try {
-                return streamModel(request);
+                return DeltaThrottle.stream(llm, request, liveDeltas);
             } catch (LlmException e) {
                 if (control.isCancelled()) {
                     throw new RunControl.RunCancelledException();
@@ -918,14 +483,12 @@ public final class AgentLoop {
                             e.statusCode(), e.code(), e);
                 }
                 recovered = true;
-                int beforeChars = compactor.chars(messages);
-                int beforeTokens = compactor.tokens(messages);
                 log.emit("context.overflow", eventMap(
                         "step", cycle,
                         "message", e.getMessage(),
                         "code", e.code(),
-                        "beforeChars", beforeChars,
-                        "beforeTokens", beforeTokens
+                        "beforeChars", compactor.chars(messages),
+                        "beforeTokens", compactor.tokens(messages)
                 ));
                 ContextCompactor.Result recovery = compactor.compactForOverflow(
                         messages, new LlmContextSummarizer(llm));
@@ -982,7 +545,6 @@ public final class AgentLoop {
                     "command", "", "output", "", "step", cycle));
             return true;
         }
-
         if (permissions != null && hasMavenBuild(context.workspace())) {
             PermissionResult approval = permissions.authorize("compile_code", Map.of("_buildExecutesCode", true));
             if (!approval.allowed()) {
@@ -993,7 +555,6 @@ public final class AgentLoop {
                 return false;
             }
         }
-
         Verifier.VerificationResult result = verifier.verify(
                 context.workspace(), settings.commandTimeoutSeconds());
         state.setVerification(result.summary());
@@ -1007,19 +568,19 @@ public final class AgentLoop {
     }
 
     private static boolean hasMavenBuild(Workspace workspace) {
-        java.nio.file.Path root = workspace.root();
-        return java.nio.file.Files.isRegularFile(root.resolve("pom.xml"))
-                || java.nio.file.Files.isExecutable(root.resolve("mvnw"))
-                || java.nio.file.Files.isRegularFile(root.resolve("mvnw.cmd"));
+        Path root = workspace.root();
+        return Files.isRegularFile(root.resolve("pom.xml"))
+                || Files.isExecutable(root.resolve("mvnw"))
+                || Files.isRegularFile(root.resolve("mvnw.cmd"));
     }
 
-    private String verificationFeedback(String summary) {
+    private static String verificationFeedback(String summary) {
         return "Automatic verification failed before the task can finish: " + summary + "\n"
                 + "Inspect the exact compiler/interpreter output, fix the source with edit_file or write_file, "
                 + "then call compile_code or run_code again. Do not claim success until the real toolchain passes.";
     }
 
-    private String goalFeedback(GoalReview review) {
+    private static String goalFeedback(GoalReview review) {
         StringBuilder out = new StringBuilder();
         if (!review.missing().isEmpty()) {
             out.append("Missing requirements: ").append(String.join("; ", review.missing())).append(". ");
@@ -1030,88 +591,7 @@ public final class AgentLoop {
         return out.length() == 0 ? "The final answer does not satisfy the original task." : out.toString().trim();
     }
 
-    private String buildSystemPrompt(String task, Workspace workspace, List<Skill> selected) {
-        StringBuilder out = new StringBuilder();
-        String goalSection = settings.goalMode() ? """
-                ## Goal mode
-                The original task is immutable and is repeated here:
-                %s
-
-                Before your final answer, check the current plan and the original task. Mark every
-                completed plan item with update_plan, and make the final answer map the requested
-                deliverables to concrete evidence (files and commands). The framework runs an
-                independent goal review; if it finds missing requirements, you will get one more
-                chance to fix them.
-
-                """.formatted(task) : "";
-        out.append("""
-                You are Jade, a local coding agent. You work on a real machine and your file edits
-                are really written to disk. You must make the artifact compile, run, and be tested.
-
-                ## Supported languages
-                - Java: .java; javac or Maven; entry is a main class.
-                - Python: .py; python3; entry is a relative file such as main.py.
-                - JavaScript: .js; Node.js; entry is a relative file such as main.js.
-                - Go: .go; go build ./... and go run .; entry defaults to the package (.).
-                - Choose the language the user asks for. For a new program, use the requested language;
-                  do not default to Java. Keep one primary language per workspace unless asked to mix.
-                - Never install an SDK or toolchain inside the workspace. Use the runtime already on PATH;
-                  .toolchain, vendor, and third_party trees are ignored by verification.
-
-                ## Hard rules
-                - Use the provided tools for every file read, write, and command. Never claim an action you did not take.
-                - Use relative paths inside the workspace. The workspace root is: %s
-                - Keep changes focused. Read files before editing them; prefer edit_file over rewriting.
-                - Maintain the visible plan with update_plan at the start and after milestones.
-                - Compile or syntax-check with compile_code, then run with run_code. Both detect the language
-                  automatically; pass language=java/python/javascript/go when you need to be explicit.
-                - compile_java and run_java remain available as Java-only aliases. Use run_command for tests
-                  such as `mvn test`, `pytest`, or `go test ./...`.
-                - If you are stuck or repeating the same inspection, call `reflect` with diagnosis,
-                  evidence, attempts, one next_action, and should_stop. Do not keep slicing the same file
-                  with different line ranges. The framework asks for reflection after repeated no-progress turns.
-                - If a genuine product decision is ambiguous (API shape, data model, tradeoff, destructive
-                  direction), call `ask_user` with one question, optional detail, mode single/multiple/text,
-                  and 2-5 short options. Do not ask for facts you can inspect yourself, and do not use it
-                  merely to confirm routine work.
-                - Before your final answer, the framework automatically verifies the workspace if any source
-                  changed. If verification fails, the failure is fed back to you. Fix it, then finish.
-                - If an installed skill is relevant, load it with load_skill. Skills are instructions, not tools.
-                - Keep the final answer concise: what changed, the verification command/result, and how to run it.
-
-                %s
-                ## Installed skill catalog
-                %s
-
-                ## Auto-selected skills
-                %s
-
-                ## Ten-phase turn
-                Every model turn runs ten phases: Intake, Context, Skills, Plan, Model, Tools, Observe,
-                Verify, Compact, Checkpoint. You only see the Model/Tools loop; the framework handles the rest.
-                """.formatted(
-                workspace.root(),
-                goalSection,
-                skills.catalog(),
-                preloadedSkills(selected)
-        ));
-        if (!teamPolicy.isBlank()) {
-            out.append("\n").append(teamPolicy);
-        }
-        return out.toString();
-    }
-
-    private String buildInitialUserMessage(String task, Workspace workspace) {
-        return """
-                TASK
-                %s
-
-                WORKSPACE TREE (initially; .agent and build directories are hidden)
-                %s
-                """.formatted(task, workspace.tree(120, 3));
-    }
-
-    private void phase(RunState state, RunEventLog log, AgentPhase phase, int cycle, String detail) {
+    private static void phase(RunState state, RunEventLog log, AgentPhase phase, int cycle, String detail) {
         state.setPhase(phase, cycle);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("phase", phase.id());
@@ -1121,19 +601,6 @@ public final class AgentLoop {
         data.put("step", cycle);
         data.put("maxSteps", state.maxSteps());
         log.emit("phase", data);
-    }
-
-    private static Map<String, Object> parseArguments(String json) {
-        if (json == null || json.isBlank()) {
-            return Map.of();
-        }
-        try {
-            Map<String, Object> parsed = JSON.readValue(json, new TypeReference<>() {
-            });
-            return parsed == null ? Map.of() : parsed;
-        } catch (JsonProcessingException e) {
-            throw new IllegalArgumentException(e.getOriginalMessage());
-        }
     }
 
     private static String truncate(String value, int max) {
@@ -1152,11 +619,10 @@ public final class AgentLoop {
         }
         return map;
     }
-    /** Child runs keep their transcript in a subdirectory of the shared workspace. */
+
     private static String persistArtifacts(Workspace workspace, RunState state,
-                                           java.util.List<ChatMessage> messages, RunEventLog log) {
+                                           List<ChatMessage> messages, RunEventLog log) {
         String dir = state.isSubagent() ? ".agent/subagents/" + state.id() : ".agent";
         return RunArtifacts.persist(workspace, state.snapshot(), messages, log, dir);
     }
-
 }

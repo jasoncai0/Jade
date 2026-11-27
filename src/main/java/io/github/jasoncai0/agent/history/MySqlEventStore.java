@@ -226,6 +226,31 @@ public final class MySqlEventStore implements EventStore {
         }
     }
 
+    @Override
+    public int deleteRuns(List<String> runIds) {
+        if (runIds == null || runIds.isEmpty()) {
+            return 0;
+        }
+        List<String> clean = runIds.stream().filter(id -> id != null && !id.isBlank()).distinct().toList();
+        if (clean.isEmpty()) {
+            return 0;
+        }
+        int deletedSessions = 0;
+        try (SqlSession session = sessionFactory.openSession(false)) {
+            EventMapper eventMapper = session.getMapper(EventMapper.class);
+            SessionMapper sessionMapper = session.getMapper(SessionMapper.class);
+            for (int start = 0; start < clean.size(); start += 500) {
+                List<String> chunk = clean.subList(start, Math.min(clean.size(), start + 500));
+                eventMapper.deleteByRunIds(chunk);
+                deletedSessions += sessionMapper.deleteByRunIds(chunk);
+            }
+            session.commit();
+            return deletedSessions;
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("Cannot delete pruned sessions", e);
+        }
+    }
+
     private Map<String, Object> compact(String type, Map<String, Object> data) {
         Map<String, Object> out = new LinkedHashMap<>(data);
         if ("llm.request".equals(type) && out.get("body") instanceof String body) {

@@ -81,6 +81,11 @@ const state = {
   prependingHistory: false,
   appendingHistory: false,
   replayingHistory: false,
+  historyAnchorGroup: null,
+  userTurn: 1,
+  stepInTurn: 1,
+  turnGroups: new Map(),
+  turnOrder: [],
   lastFocused: null
 };
 
@@ -167,11 +172,12 @@ function setKeyState(config) {
 
 function applyConfig(config) {
   state.config = config;
-  const sandboxActive = config.sandbox === 'workspace-write';
+  const isDockerSandbox = config.sandboxBackend === 'docker' || config.sandbox === 'docker';
+  const sandboxActive = isDockerSandbox || config.sandbox === 'workspace-write';
   $('sandboxBanner').classList.toggle('hidden', sandboxActive);
   if (!sandboxActive) {
     $('sandboxBannerText').textContent = (config.sandboxDescription || 'Commands can write outside the workspace.')
-      + ' Set AGENT_SANDBOX=auto or required to confine shell commands.';
+      + ' Set AGENT_SANDBOX=auto (macOS jail) or AGENT_SANDBOX_BACKEND=docker.';
   }
   $('modelPill').textContent = config.model || 'deepseek-chat';
   $('modelPill').title = config.baseUrl || '';
@@ -241,6 +247,7 @@ function truncate(value, max = 110) {
 /* ------------------------------------------------------------------ runs */
 
 async function loadInitial() {
+  const initialToken = state.selectionToken;
   const config = await api('/api/config');
   applyConfig(config);
   const [runs, tools, skills] = await Promise.all([
@@ -254,6 +261,7 @@ async function loadInitial() {
   $('emptyTools').textContent = config.toolCount ?? state.tools.length;
   $('emptySkills').textContent = config.skillCount ?? state.skills.length;
   renderRunList();
+  if (initialToken !== state.selectionToken) return;
   if (state.runs.length > 0) {
     selectRun(state.runs[0].id);
   } else {
@@ -450,19 +458,17 @@ async function loadEarlier() {
     const page = await api(`/api/runs/${encodeURIComponent(id)}/history?before=${state.oldestSeq}&limit=150&compact=1`);
     if (token !== state.selectionToken) return;
     const events = page.events || [];
+    const timeline = $('timeline');
     state.replayingHistory = true;
     state.prependingHistory = state.traceOrder === 'asc';
     state.appendingHistory = state.traceOrder === 'desc';
-    if (state.prependingHistory) {
-      for (let i = events.length - 1; i >= 0; i--) {
-        const event = events[i];
-        handleEvent(event.type, event.data || {}, event.timestamp, event.seq);
-      }
-    } else {
-      for (const event of events) {
-        handleEvent(event.type, event.data || {}, event.timestamp, event.seq);
-      }
+    state.historyAnchorGroup = state.prependingHistory ? timeline.firstElementChild : null;
+    state.userTurn = 0;
+    state.stepInTurn = 1;
+    for (const event of events) {
+      handleEvent(event.type, event.data || {}, event.timestamp, event.seq);
     }
+    state.historyAnchorGroup = null;
     state.prependingHistory = false;
     state.appendingHistory = false;
     state.replayingHistory = false;
@@ -846,6 +852,10 @@ function handleEvent(type, data, timestamp, seq = 0) {
 
     case 'phase': {
       const step = Number(data.step || 0);
+      if (step > 0 && step !== state.stepInTurn) {
+        state.stepInTurn = step;
+        autoCollapseOlderTurns();
+      }
       if (step !== state.currentStep) {
         state.currentStep = step;
         state.visited.clear();
@@ -984,6 +994,9 @@ function beginFollowUpTurn(data, timestamp) {
   state.finishRendered = false;
   state.visited.clear();
   state.currentStep = 0;
+  state.userTurn += 1;
+  state.stepInTurn = 1;
+  autoCollapseOlderTurns();
   state.activePhase = null;
   state.phaseDetail = '';
   state.verification = null;
@@ -1247,16 +1260,139 @@ function finalizeRun(snapshot) {
 function clearTimeline() {
   const timeline = $('timeline');
   timeline.replaceChildren();
+  state.userTurn = 1;
+  state.stepInTurn = 1;
+  state.turnGroups.clear();
+  state.turnOrder = [];
+  state.historyAnchorGroup = null;
   const empty = el('div', 'timeline-empty');
   empty.id = 'timelineEmpty';
   empty.append(el('span', 'scanner'), document.createTextNode('Waiting for the first event…'));
   timeline.appendChild(empty);
   $('traceCount').textContent = '0';
+  syncTraceToggleAllButton();
 }
 
 function ensureTimelineReady() {
   const empty = $('timelineEmpty');
   if (empty) empty.remove();
+}
+
+function currentTurnDescriptor() {
+  const step = Math.max(1, Number(state.stepInTurn) || 1);
+  if (state.userTurn <= 0) {
+    return { key: `earlier:${step}`, label: `Earlier · Turn ${step}` };
+  }
+  if (state.userTurn === 1) {
+    return { key: `1:${step}`, label: `Turn ${step}` };
+  }
+  return { key: `${state.userTurn}:${step}`, label: `Follow-up ${state.userTurn - 1} · Turn ${step}` };
+}
+
+function setGroupCollapsed(group, collapsed) {
+  if (!group) return;
+  group.collapsed = Boolean(collapsed);
+  group.groupEl.classList.toggle('collapsed', group.collapsed);
+  group.headerBtn.setAttribute('aria-expanded', String(!group.collapsed));
+}
+
+function updateTurnGroupMeta(group) {
+  if (!group) return;
+  const parts = [`${group.count} event${group.count === 1 ? '' : 's'}`];
+  if (group.tools > 0) {
+    parts.push(`${group.tools} tool${group.tools === 1 ? '' : 's'}`);
+  }
+  if (group.verifyLabel) {
+    parts.push(group.verifyLabel);
+  }
+  group.metaEl.textContent = parts.join(' · ');
+}
+
+function syncTraceToggleAllButton() {
+  const btn = $('traceToggleAllBtn');
+  if (!btn) return;
+  const groups = Array.from(state.turnGroups.values());
+  const anyCollapsed = groups.some((g) => g.collapsed);
+  btn.textContent = anyCollapsed ? 'Expand all' : 'Collapse all';
+  btn.disabled = groups.length === 0;
+}
+
+function toggleAllTraceTurns() {
+  const groups = Array.from(state.turnGroups.values());
+  if (groups.length === 0) return;
+  const anyCollapsed = groups.some((g) => g.collapsed);
+  const nextCollapsed = !anyCollapsed;
+  for (const group of groups) {
+    group.manualToggle = true;
+    setGroupCollapsed(group, nextCollapsed);
+  }
+  syncTraceToggleAllButton();
+}
+
+function autoCollapseOlderTurns() {
+  if (state.turnOrder.length < 2) return;
+  for (let i = 0; i < state.turnOrder.length; i++) {
+    const group = state.turnGroups.get(state.turnOrder[i]);
+    if (!group || group.manualToggle) continue;
+    setGroupCollapsed(group, true);
+  }
+  syncTraceToggleAllButton();
+}
+
+function ensureTurnGroup() {
+  const timeline = $('timeline');
+  const { key, label } = currentTurnDescriptor();
+  let group = state.turnGroups.get(key);
+  if (group) return group;
+
+  const groupEl = el('div', 'trace-turn-group');
+  groupEl.dataset.turnKey = key;
+  const headerBtn = el('button', 'trace-turn-header');
+  headerBtn.type = 'button';
+  headerBtn.setAttribute('aria-expanded', 'true');
+  const chevron = el('span', 'trace-turn-chevron', '›');
+  chevron.setAttribute('aria-hidden', 'true');
+  const titleEl = el('span', 'trace-turn-title', label);
+  const metaEl = el('span', 'trace-turn-meta', '0 events');
+  headerBtn.append(chevron, titleEl, metaEl);
+  const bodyEl = el('div', 'trace-turn-body');
+  groupEl.append(headerBtn, bodyEl);
+
+  group = {
+    key,
+    label,
+    groupEl,
+    headerBtn,
+    metaEl,
+    bodyEl,
+    count: 0,
+    tools: 0,
+    verifyLabel: '',
+    collapsed: false,
+    manualToggle: false
+  };
+  headerBtn.addEventListener('click', () => {
+    group.manualToggle = true;
+    setGroupCollapsed(group, !group.collapsed);
+    syncTraceToggleAllButton();
+  });
+
+  state.turnGroups.set(key, group);
+  if (state.prependingHistory && state.historyAnchorGroup && state.historyAnchorGroup.parentNode === timeline) {
+    timeline.insertBefore(groupEl, state.historyAnchorGroup);
+    state.turnOrder.unshift(key);
+  } else if (state.appendingHistory) {
+    timeline.appendChild(groupEl);
+    state.turnOrder.unshift(key);
+  } else if (state.traceOrder === 'desc') {
+    timeline.insertBefore(groupEl, timeline.firstChild);
+    state.turnOrder.push(key);
+  } else {
+    timeline.appendChild(groupEl);
+    state.turnOrder.push(key);
+  }
+  syncTraceToggleAllButton();
+  return group;
 }
 
 function traceEntry(kind, timestamp) {
@@ -1265,6 +1401,7 @@ function traceEntry(kind, timestamp) {
   const stick = state.traceOrder === 'desc'
     ? timeline.scrollTop <= 80
     : timeline.scrollTop + timeline.clientHeight >= timeline.scrollHeight - 80;
+  const group = ensureTurnGroup();
   const entry = el('div', `trace-entry ${kind}`);
   const dot = el('div', 'trace-dot');
   const top = el('div', 'trace-top');
@@ -1273,19 +1410,18 @@ function traceEntry(kind, timestamp) {
   const time = el('span', 'trace-time', timeLabel(timestamp));
   top.append(label, time);
   entry.append(dot, top);
-  if (state.prependingHistory) {
-    timeline.insertBefore(entry, timeline.firstChild);
-  } else if (state.appendingHistory) {
-    timeline.appendChild(entry);
-  } else if (state.traceOrder === 'desc') {
-    timeline.insertBefore(entry, timeline.firstChild);
+  if (state.traceOrder === 'desc' && !state.prependingHistory) {
+    group.bodyEl.insertBefore(entry, group.bodyEl.firstChild);
   } else {
-    timeline.appendChild(entry);
+    group.bodyEl.appendChild(entry);
   }
+  group.count += 1;
+  if (kind === 'tool') group.tools += 1;
+  updateTurnGroupMeta(group);
   state.timelineCount += 1;
   $('traceCount').textContent = String(state.timelineCount);
   if (stick) timeline.scrollTop = state.traceOrder === 'desc' ? 0 : timeline.scrollHeight;
-  return { entry, top };
+  return { entry, top, group };
 }
 
 function setView(view = 'session') {
@@ -1317,8 +1453,14 @@ function setTraceOrder(order) {
   if (state.traceOrder === next) return;
   state.traceOrder = next;
   const timeline = $('timeline');
-  const entries = Array.from(timeline.children).filter((node) => node.classList.contains('trace-entry'));
-  entries.reverse().forEach((entry) => timeline.appendChild(entry));
+  const groups = Array.from(timeline.children).filter((node) => node.classList.contains('trace-turn-group'));
+  groups.reverse().forEach((groupNode) => {
+    const body = groupNode.querySelector('.trace-turn-body');
+    if (body) {
+      Array.from(body.children).reverse().forEach((entry) => body.appendChild(entry));
+    }
+    timeline.appendChild(groupNode);
+  });
   $('traceOrderAsc').classList.toggle('active', next === 'asc');
   $('traceOrderDesc').classList.toggle('active', next === 'desc');
   $('traceOrderAsc').setAttribute('aria-pressed', String(next === 'asc'));
@@ -1549,9 +1691,13 @@ function addToolEnd(data, timestamp) {
 }
 
 function addVerification(data, timestamp) {
-  const { entry } = traceEntry('verify', timestamp);
+  const { entry, group } = traceEntry('verify', timestamp);
   const ok = Boolean(data.ok);
   const skipped = Boolean(data.skipped);
+  if (group) {
+    group.verifyLabel = skipped ? 'verify skipped' : ok ? 'build passed' : 'build failed';
+    updateTurnGroupMeta(group);
+  }
   entry.classList.add(ok ? 'ok' : 'fail');
   const box = el('div', `verify-box ${ok ? '' : 'fail'}${skipped ? ' skip' : ''}`.trim());
   const title = el('div', 'verify-title');
@@ -1931,31 +2077,44 @@ async function showTeam() {
 }
 
 
-async function showMemory() {
+async function showMemory(activeTab = 'active') {
+  const tab = activeTab === 'pending' ? 'pending' : 'active';
   openModal('Memory');
   modalLoading('Reading Mem0 memory...');
   try {
-    const [health, items] = await Promise.all([
+    const [health, items, pending] = await Promise.all([
       api('/api/memory/health'),
-      api('/api/memory')
+      api('/api/memory').catch(() => []),
+      api('/api/memory/pending').catch(() => [])
     ]);
     const body = $('modalBody');
     body.replaceChildren();
     const status = el('p', 'modal-lede',
       health.available
-        ? `Connected to ${health.endpoint || 'Mem0'} · ${items.length} memor${items.length === 1 ? 'y' : 'ies'} for this project.`
-        : `Memory is ${health.mode || 'off'} · ${health.message || 'not connected'}.`);
+        ? `Connected to ${health.endpoint || 'Mem0'} · ${items.length} active · ${pending.length} pending review.`
+        : `Memory is ${health.mode || 'off'} · ${health.message || 'not connected'} (${pending.length} pending locally).`);
     body.appendChild(status);
+
+    const tabs = el('div', 'memory-tabs');
+    const activeBtn = el('button', `ghost small${tab === 'active' ? ' active-tab' : ''}`, `Active (${items.length})`);
+    activeBtn.type = 'button';
+    activeBtn.addEventListener('click', () => showMemory('active'));
+    const pendingBtn = el('button', `ghost small${tab === 'pending' ? ' active-tab' : ''}`, `Pending (${pending.length})`);
+    pendingBtn.type = 'button';
+    pendingBtn.addEventListener('click', () => showMemory('pending'));
+    tabs.append(activeBtn, pendingBtn);
+    body.appendChild(tabs);
+
     const actions = el('div', 'modal-actions');
     const refresh = el('button', 'ghost', 'Refresh');
     refresh.type = 'button';
-    refresh.addEventListener('click', showMemory);
+    refresh.addEventListener('click', () => showMemory(tab));
     const exportButton = el('button', 'ghost', 'Export JSON');
     exportButton.type = 'button';
     exportButton.addEventListener('click', async () => {
       try {
         const data = await api('/api/memory/export');
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const blob = new Blob([typeof data === 'string' ? data : JSON.stringify(data, null, 2)], { type: 'application/json' });
         const link = document.createElement('a');
         link.href = URL.createObjectURL(blob);
         link.download = 'jade-memories.json';
@@ -1967,8 +2126,64 @@ async function showMemory() {
     });
     actions.append(refresh, exportButton);
     body.appendChild(actions);
+
+    if (tab === 'pending') {
+      if (!pending.length) {
+        body.appendChild(el('p', 'modal-lede', 'No candidate memories waiting for review.'));
+        return;
+      }
+      const pendingList = el('div', 'memory-list');
+      pending.forEach((item) => {
+        const row = el('div', 'memory-item pending-memory-item');
+        const copy = el('div', 'memory-copy');
+        const pct = `${Math.round(Number(item.confidence || 0) * 100)}%`;
+        copy.append(
+          el('div', 'memory-text', item.statement || ''),
+          el('div', 'memory-meta', [item.kind, item.scope, `confidence ${pct}`, item.sourceRunId].filter(Boolean).join(' · '))
+        );
+        if (item.evidenceQuote) {
+          copy.appendChild(el('div', 'memory-quote', `"${item.evidenceQuote}" (${item.evidenceSource || 'user'})`));
+        }
+        if (item.reason) {
+          copy.appendChild(el('div', 'memory-meta', item.reason));
+        }
+        const btnWrap = el('div', 'memory-item-actions');
+        const approve = el('button', 'ghost accent-ghost', 'Approve');
+        approve.type = 'button';
+        approve.addEventListener('click', async () => {
+          approve.disabled = true;
+          try {
+            await api(`/api/memory/pending/${encodeURIComponent(item.id)}/approve`, { method: 'POST', body: '{}' });
+            toast('Memory approved and promoted to active.');
+            showMemory('pending');
+          } catch (error) {
+            approve.disabled = false;
+            toast(error.message, true);
+          }
+        });
+        const reject = el('button', 'ghost danger', 'Reject');
+        reject.type = 'button';
+        reject.addEventListener('click', async () => {
+          reject.disabled = true;
+          try {
+            await api(`/api/memory/pending/${encodeURIComponent(item.id)}/reject`, { method: 'POST', body: '{}' });
+            toast('Pending memory rejected.');
+            showMemory('pending');
+          } catch (error) {
+            reject.disabled = false;
+            toast(error.message, true);
+          }
+        });
+        btnWrap.append(approve, reject);
+        row.append(copy, btnWrap);
+        pendingList.appendChild(row);
+      });
+      body.appendChild(pendingList);
+      return;
+    }
+
     if (!items.length) {
-      body.appendChild(el('p', 'modal-lede', 'No stored memories for this project yet.'));
+      body.appendChild(el('p', 'modal-lede', 'No stored active memories for this project yet.'));
       return;
     }
     const list = el('div', 'memory-list');
@@ -1985,7 +2200,7 @@ async function showMemory() {
         if (!confirm('Delete this memory?')) return;
         try {
           await api(`/api/memory/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
-          showMemory();
+          showMemory('active');
         } catch (error) {
           toast(error.message, true);
         }
@@ -2165,11 +2380,14 @@ function wireEvents() {
   $('contextBackdrop').addEventListener('click', () => setContextOpen(false));
   $('traceOrderAsc').addEventListener('click', () => setTraceOrder('asc'));
   $('traceOrderDesc').addEventListener('click', () => setTraceOrder('desc'));
+  if ($('traceToggleAllBtn')) {
+    $('traceToggleAllBtn').addEventListener('click', toggleAllTraceTurns);
+  }
   $('loadEarlierBtn').addEventListener('click', loadEarlier);
   $('howBtn').addEventListener('click', showHowItWorks);
   $('skillsBtn').addEventListener('click', showSkills);
   $('toolsBtn').addEventListener('click', showTools);
-  $('memoryBtn').addEventListener('click', showMemory);
+  $('memoryBtn').addEventListener('click', () => showMemory('active'));
   $('teamBtn').addEventListener('click', showTeam);
   $('teamStartToggle').addEventListener('change', (event) => {
     state.newTeamEnabled = event.target.checked;

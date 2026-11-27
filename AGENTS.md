@@ -11,13 +11,15 @@
 
 ## 当前架构
 
-- `CodingAgentApplication`：`--check` / `--ping` / `--task` / `--task-file` / `serve`。
-- `AgentService`：run/session 生命周期、恢复、fork、权限与问题 broker、MCP 管理器、MySQL 事件存储。
-- `AgentLoop`：每个模型 turn 走十阶段（Intake → Context → Skills → Plan → Model → Tools → Observe → Verify → Compact → Checkpoint）；默认不设模型 turn 上限。
+- `CodingAgentApplication`：`--check` / `--ping` / `--prune`（`--keep`、`--older-than-days`、`--dry-run`） / `--task` / `--task-file` / `serve`。
+- `AgentService`（配合 `SessionRecoveryService`、`SessionForkService`、`SessionArchiver`）：run/session 生命周期、恢复、fork、归档清理、权限与问题 broker、MCP 管理器、MySQL 事件存储与可插拔沙箱会话。
+- `AgentLoop`（配合 `SystemPromptBuilder`、`DeltaThrottle`、`ToolBatchExecutor`、`MemoryBridge`）：每个模型 turn 走十阶段（Intake → Context → Skills → Plan → Model → Tools → Observe → Verify → Compact → Checkpoint）；默认不设模型 turn 上限。
 - `ToolRegistry`：15 个内置工具 + `ServiceLoader<ToolProvider>` + MCP 工具；写操作、命令、网络经过 `PermissionBroker`。
 - `SkillRegistry`：`SKILL.md` 发现、catalog 注入、`load_skill` 按需读取、语言/任务匹配。
-- `history/`：MySQL `jade_sessions` / `jade_events`，MyBatis mapper；历史分页、compact 投影、完整 LLM 请求体按需读取。
-- `GoalReviewer`：完成前独立复核原始任务；`ContextCompactor`：token 预算 + 模型摘要；`Sandbox`：macOS `sandbox-exec` 可选写监狱，默认关闭。
+- `history/`：MySQL `jade_sessions` / `jade_events`，MyBatis mapper；历史分页、compact 投影、完整 LLM 请求体按需读取；`SessionArchiver` 支持归档 `.agent/` 后批量清理过期工作区与数据库行。
+- `memory/admission/`：Mem0 混合准入 v2（确定性密钥过滤、`emit_memory` strict tool、原文子串 `EvidenceVerifier`、`infer=false`、Pending 审批箱 `jade_memory_pending`、按 kind 设 TTL 与 `supersedes` 冲突替换、复合召回排序）。
+- `sandbox/`：`SandboxProvider` / `SandboxSession` SPI（内置默认 `LocalSandboxProvider` + `ServiceLoader` 发现的可选 `DockerSandboxProvider`，`AGENT_SANDBOX_BACKEND=local|docker` 显式切换、禁止静默降级）。
+- `GoalReviewer`：完成前独立复核原始任务；`ContextCompactor`：token 预算 + 模型摘要。
 
 ## 常用命令
 
@@ -28,7 +30,9 @@ cd java-coding-agent
 ./run.sh                 # 默认 8080
 ./run.sh --port 8081
 ./run.sh --task "..." --max-steps 0
+./run.sh --prune --dry-run
 mvn test
+(cd e2e && npx playwright test)
 mvn -q -DskipTests package
 ```
 
@@ -51,7 +55,7 @@ MySQL 用 `docker compose up -d`；数据库 `jade`，端口 `127.0.0.1:3307`。
 - Team 默认关闭（`AGENT_TEAM_ENABLED=false`），session 级开关；任务板持久化在 MySQL，成员为 runtime-only，重启后不复活。
 - MCP 未实现 prompts / sampling / OAuth；HTTP 启动重试是有限退避，不是完整重连状态机。
 - 单用户、localhost 默认；非 loopback 绑定必须配置 `AGENT_WEB_TOKEN`，且写接口校验 `Host` / `Origin` / `Sec-Fetch-Site` / `Content-Type: application/json`。
-- Web UI 为 Codex 风格：左侧会话栏、中间阅读列、底部 composer；Session/Trace 双 Tab，Context 详情在右侧抽屉。Trace 默认收起在 Tab 内。
+- Web UI 为 Codex 风格：左侧会话栏、中间阅读列、底部 composer；Session/Trace 双 Tab（Trace 支持按轮次自动折叠与一键展开/收起，Memory 弹窗支持 Active / Pending 双标签审批），Context 详情在右侧抽屉，核心流由 `e2e/console.spec.mjs` Playwright 用例回归。
 
 ## 文档索引
 

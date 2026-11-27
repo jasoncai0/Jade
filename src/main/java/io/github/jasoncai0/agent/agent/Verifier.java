@@ -29,7 +29,11 @@ public final class Verifier {
     }
 
     public Verifier(CommandRunner runner) {
-        this.runner = runner;
+        this.runner = runner == null ? new CommandRunner() : runner;
+    }
+
+    public CommandRunner runner() {
+        return runner;
     }
 
     /**
@@ -345,7 +349,10 @@ public final class Verifier {
         return configured == null || configured.isBlank() ? "go" : configured.strip();
     }
 
-    private static Path javaTool(String name) {
+    private Path javaTool(String name) {
+        if (runner.isContainer()) {
+            return Path.of(name);
+        }
         String executable = isWindows() ? name + ".exe" : name;
         Path candidate = Path.of(System.getProperty("java.home"), "bin", executable);
         return Files.isExecutable(candidate) ? candidate : Path.of(executable);

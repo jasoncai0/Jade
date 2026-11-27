@@ -2,7 +2,9 @@ package io.github.jasoncai0.agent.config;
 
 import io.github.jasoncai0.agent.memory.MemoryMode;
 import io.github.jasoncai0.agent.memory.MemorySettings;
+import io.github.jasoncai0.agent.memory.admission.AdmissionMode;
 import io.github.jasoncai0.agent.permission.PermissionMode;
+import io.github.jasoncai0.agent.sandbox.SandboxSettings;
 
 import java.nio.file.Path;
 import java.util.Locale;
@@ -18,24 +20,36 @@ public record AppConfig(
         ServerSettings server,
         MysqlSettings mysql,
         MemorySettings memory,
-        boolean teamDefault
+        boolean teamDefault,
+        SandboxSettings sandbox
 ) {
+    public AppConfig {
+        sandbox = sandbox == null ? SandboxSettings.defaults() : sandbox;
+    }
 
     /** Backwards-compatible constructor for tests and embedded use. */
     public AppConfig(Path projectRoot, Path skillsDir, Path workspacesDir, LlmSettings llm,
                      AgentSettings agent, ServerSettings server) {
-        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, null, null, false);
+        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, null, null, false, SandboxSettings.defaults());
     }
 
     /** Backwards-compatible constructor before long-term memory was added. */
     public AppConfig(Path projectRoot, Path skillsDir, Path workspacesDir, LlmSettings llm,
                      AgentSettings agent, ServerSettings server, MysqlSettings mysql) {
-        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, mysql, null, false);
+        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, mysql, null, false, SandboxSettings.defaults());
     }
+
     /** Backwards-compatible constructor before team defaults were added. */
     public AppConfig(Path projectRoot, Path skillsDir, Path workspacesDir, LlmSettings llm,
                      AgentSettings agent, ServerSettings server, MysqlSettings mysql, MemorySettings memory) {
-        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, mysql, memory, false);
+        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, mysql, memory, false, SandboxSettings.defaults());
+    }
+
+    /** Backwards-compatible constructor before pluggable sandboxes were added. */
+    public AppConfig(Path projectRoot, Path skillsDir, Path workspacesDir, LlmSettings llm,
+                     AgentSettings agent, ServerSettings server, MysqlSettings mysql,
+                     MemorySettings memory, boolean teamDefault) {
+        this(projectRoot, skillsDir, workspacesDir, llm, agent, server, mysql, memory, teamDefault, SandboxSettings.defaults());
     }
 
     public static final String VERSION = "1.4.0";
@@ -79,11 +93,14 @@ public record AppConfig(
                 integer(get, "AGENT_PORT", 8080, 0, 65_535),
                 value(get, "AGENT_WEB_TOKEN", "")
         );
-        MysqlSettings mysql = new MysqlSettings(
-                value(get, "JADE_MYSQL_URL", MysqlSettings.DEFAULT_URL),
-                value(get, "JADE_MYSQL_USER", "jade"),
-                value(get, "JADE_MYSQL_PASSWORD", "jade_dev_password")
-        );
+        String mysqlUrl = value(get, "JADE_MYSQL_URL", MysqlSettings.DEFAULT_URL);
+        MysqlSettings mysql = isDisabled(mysqlUrl)
+                ? null
+                : new MysqlSettings(
+                        mysqlUrl,
+                        value(get, "JADE_MYSQL_USER", "jade"),
+                        value(get, "JADE_MYSQL_PASSWORD", "jade_dev_password")
+                );
         MemorySettings memory = new MemorySettings(
                 MemoryMode.fromId(value(get, "AGENT_MEMORY_MODE", "on")),
                 value(get, "AGENT_MEMORY_PROVIDER", MemorySettings.DEFAULT_PROVIDER),
@@ -96,7 +113,22 @@ public record AppConfig(
                 integer(get, "AGENT_MEMORY_WRITE_TIMEOUT_MS", MemorySettings.DEFAULT_WRITE_TIMEOUT_MS,
                         100, 30_000),
                 bool(get, "AGENT_MEMORY_TELEMETRY", true),
-                value(get, "AGENT_MEMORY_PROJECT_ID", "")
+                value(get, "AGENT_MEMORY_PROJECT_ID", ""),
+                AdmissionMode.fromId(value(get, "AGENT_MEMORY_ADMISSION", "hybrid")),
+                floating(get, "AGENT_MEMORY_AUTO_THRESHOLD", MemorySettings.DEFAULT_AUTO_THRESHOLD, 0.0, 1.0),
+                floating(get, "AGENT_MEMORY_REVIEW_THRESHOLD", MemorySettings.DEFAULT_REVIEW_THRESHOLD, 0.0, 1.0),
+                integer(get, "AGENT_MEMORY_MAX_WRITES_PER_RUN", MemorySettings.DEFAULT_MAX_WRITES_PER_RUN, 1, 10),
+                integer(get, "AGENT_MEMORY_ADMISSION_TIMEOUT_MS", MemorySettings.DEFAULT_ADMISSION_TIMEOUT_MS,
+                        100, 30_000)
+        );
+        SandboxSettings sandbox = new SandboxSettings(
+                value(get, "AGENT_SANDBOX_BACKEND", SandboxSettings.BACKEND_LOCAL),
+                value(get, "AGENT_SANDBOX_DOCKER_IMAGE", SandboxSettings.DEFAULT_DOCKER_IMAGE),
+                value(get, "AGENT_SANDBOX_DOCKER_NETWORK", SandboxSettings.DEFAULT_DOCKER_NETWORK),
+                value(get, "AGENT_SANDBOX_DOCKER_MEMORY", SandboxSettings.DEFAULT_DOCKER_MEMORY),
+                value(get, "AGENT_SANDBOX_DOCKER_CPUS", SandboxSettings.DEFAULT_DOCKER_CPUS),
+                integer(get, "AGENT_SANDBOX_DOCKER_PIDS", SandboxSettings.DEFAULT_DOCKER_PIDS, 16, 65_536),
+                value(get, "AGENT_SANDBOX_DOCKER_PREVIEW_PORTS", SandboxSettings.DEFAULT_PREVIEW_PORTS)
         );
         return new AppConfig(
                 root,
@@ -107,12 +139,19 @@ public record AppConfig(
                 server,
                 mysql,
                 memory,
-                bool(get, "AGENT_TEAM_ENABLED", false)
+                bool(get, "AGENT_TEAM_ENABLED", false),
+                sandbox
         );
     }
 
     public boolean hasApiKey() {
         return llm.hasApiKey();
+    }
+
+    private static boolean isDisabled(String raw) {
+        if (raw == null || raw.isBlank()) return true;
+        String norm = raw.trim().toLowerCase(Locale.ROOT);
+        return "off".equals(norm) || "none".equals(norm) || "disabled".equals(norm) || "false".equals(norm);
     }
 
     private static String value(Function<String, String> get, String key, String fallback) {
@@ -133,6 +172,22 @@ public record AppConfig(
             return parsed;
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(key + " must be an integer, got '" + raw.trim() + "'", e);
+        }
+    }
+
+    private static double floating(Function<String, String> get, String key, double fallback, double min, double max) {
+        String raw = get.apply(key);
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            double parsed = Double.parseDouble(raw.trim());
+            if (Double.isNaN(parsed) || parsed < min || parsed > max) {
+                throw new IllegalArgumentException(key + " must be between " + min + " and " + max + ", got " + parsed);
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(key + " must be a number, got '" + raw.trim() + "'", e);
         }
     }
 

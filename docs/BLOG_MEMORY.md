@@ -59,6 +59,9 @@
 | 28 | 2026-11-26 | Team 上下文串味与提示词漏挂 | `send_message` 续跑 teammate 时混入了 Lead 的历史消息；Lead 从未收到 `Team mode` 系统提示词 | `runTeamTurn` 误调单参 `loadMessages(root)` 读取根 `.agent/transcript.json`；`executeTurn` 漏调 `.withTeamPolicy(...)` | 改调双参 `loadMessages(root, run.id())` 读取子目录；根会话补挂 `.withTeamPolicy(team.teamPolicy(run))` | Team 8.5 |
 | 29 | 2026-11-26 | Mem0 跨会话失忆 | 新开会话无法召回上一会话写入的 `scope=project` 记忆 | `projectId` 对单次运行目录 `agent-workspaces/run-xxxx` 取哈希，每次新会话目录变化导致过滤失败 | 默认收敛到 `workspacesRoot` 逻辑项目路径（支持 `AGENT_MEMORY_PROJECT_ID` 覆盖），并对 `health()` 增加 15s 缓存 | Mem0 11.6 |
 | 30 | 2026-11-26 | 本地 Web CSRF / DNS Rebinding | 浏览器跨站简单请求 `text/plain` 可向 `127.0.0.1` 提交任务或批准权限 | `WebServer` 未校验 `Host`、`Origin`/`Sec-Fetch-Site` 与 `Content-Type: application/json` | loopback 强制校验 `Host` 与同源头，JSON 接口拒绝非 `application/json`，非 loopback 强制要求 `AGENT_WEB_TOKEN` | 安全审计 |
+| 31 | 2026-11-27 | CI 多语言环境 | GitHub Actions `ubuntu-latest` 通过，`macos-latest` 在 `MultiLanguageVerifierTest.verifiesAndRunsGo` 报 `Cannot run program "go"` | macOS 15 arm64 runner 默认未注入 Go 到 `PATH`，工作流漏配 `setup-go`，测试也未在缺工具链时跳过 | CI 增加 `actions/setup-go@v5` 覆盖双平台真实 Go 构建；单测补 `Assumptions.assumeTrue` 兼容无 Go 开发机 | 环境 3.3 |
+| 32 | 2026-11-27 | 容器内 JDK 路径 | macOS 宿主机开启 `AGENT_SANDBOX_BACKEND=docker` 时，若按 `java.home` 拼 `/Library/Java/.../bin/javac`，Linux 容器内报不存在 | `Verifier.javaTool()` 无条件取宿主机 `System.getProperty("java.home")` 绝对路径 | `runner.isContainer()` 为真时改走容器 `PATH` 上的 `javac` / `java` | 环境 2.2 |
+| 33 | 2026-11-27 | 降级态记忆作用域 | `AGENT_MEMORY_MODE=off` 或 Mem0 不可达回退 `NoopMemoryService` 时，`/api/memory/pending` 查不到自定义 `AGENT_MEMORY_PROJECT_ID` 下的待审项 | `NoopMemoryService.scope()` 硬编码 `MemorySettings.defaults()`，丢失了 `AppConfig` 中的 `projectId` 与 `workspacesRoot` | `NoopMemoryService` 保留传入的 `MemorySettings` 与 `workspacesRoot`，保证降级态与在线态 `projectId` 一致 | Mem0 11.7 |
 
 ## 发布记录
 

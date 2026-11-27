@@ -8,8 +8,14 @@ public record MemoryCandidate(
         double confidence,
         boolean infer,
         boolean global,
-        String sessionId
+        String sessionId,
+        String supersedes
 ) {
+    public MemoryCandidate(String text, String kind, String source, double confidence,
+                           boolean infer, boolean global, String sessionId) {
+        this(text, kind, source, confidence, infer, global, sessionId, "");
+    }
+
     public MemoryCandidate {
         text = text == null ? "" : text.strip();
         if (text.isBlank()) throw new IllegalArgumentException("memory text is required");
@@ -17,5 +23,6 @@ public record MemoryCandidate(
         if (source == null || source.isBlank()) source = "user";
         if (confidence < 0 || confidence > 1) confidence = 0.5;
         if (sessionId == null) sessionId = "";
+        if (supersedes == null) supersedes = "";
     }
 }

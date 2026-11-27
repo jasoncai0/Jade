@@ -33,6 +33,10 @@ public interface EventStore extends AutoCloseable {
 
     void importRun(RunSnapshot snapshot, List<AgentEvent> events);
 
+    default int deleteRuns(List<String> runIds) {
+        return 0;
+    }
+
     @Override
     void close();
 }

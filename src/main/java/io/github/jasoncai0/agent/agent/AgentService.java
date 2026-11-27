@@ -1,38 +1,46 @@
 package io.github.jasoncai0.agent.agent;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.jasoncai0.agent.config.AgentSettings;
 import io.github.jasoncai0.agent.config.AppConfig;
 import io.github.jasoncai0.agent.config.Log;
 import io.github.jasoncai0.agent.history.EventStore;
 import io.github.jasoncai0.agent.history.MySqlEventStore;
+import io.github.jasoncai0.agent.history.SessionArchiver;
 import io.github.jasoncai0.agent.language.Language;
 import io.github.jasoncai0.agent.llm.ChatMessage;
 import io.github.jasoncai0.agent.llm.DeepSeekClient;
 import io.github.jasoncai0.agent.llm.LlmClient;
 import io.github.jasoncai0.agent.mcp.McpManager;
+import io.github.jasoncai0.agent.memory.MemoryScope;
 import io.github.jasoncai0.agent.memory.MemoryService;
-import io.github.jasoncai0.agent.memory.NoopMemoryService;
 import io.github.jasoncai0.agent.memory.MemoryServices;
+import io.github.jasoncai0.agent.memory.NoopMemoryService;
+import io.github.jasoncai0.agent.memory.admission.MemoryAdmissionPipeline;
+import io.github.jasoncai0.agent.memory.admission.PendingMemoryItem;
+import io.github.jasoncai0.agent.memory.admission.PendingMemoryStore;
+import io.github.jasoncai0.agent.memory.admission.PendingMemoryStores;
+import io.github.jasoncai0.agent.permission.PermissionDecision;
+import io.github.jasoncai0.agent.permission.PermissionMode;
+import io.github.jasoncai0.agent.permission.PermissionRequest;
+import io.github.jasoncai0.agent.permission.PermissionResult;
+import io.github.jasoncai0.agent.permission.PermissionScope;
+import io.github.jasoncai0.agent.permission.PermissionSession;
+import io.github.jasoncai0.agent.question.QuestionAnswer;
+import io.github.jasoncai0.agent.question.QuestionBroker;
+import io.github.jasoncai0.agent.question.QuestionRequest;
+import io.github.jasoncai0.agent.sandbox.SandboxRegistry;
+import io.github.jasoncai0.agent.sandbox.SandboxSession;
 import io.github.jasoncai0.agent.skill.Skill;
 import io.github.jasoncai0.agent.skill.SkillRegistry;
 import io.github.jasoncai0.agent.team.TeamMember;
 import io.github.jasoncai0.agent.team.TeamService;
 import io.github.jasoncai0.agent.team.TeamStores;
+import io.github.jasoncai0.agent.team.TeamTask;
 import io.github.jasoncai0.agent.team.TeamToolset;
 import io.github.jasoncai0.agent.tool.Tool;
 import io.github.jasoncai0.agent.tool.ToolRegistry;
 import io.github.jasoncai0.agent.tool.builtin.BuiltInTools;
 import io.github.jasoncai0.agent.tool.builtin.DelegateTaskTool;
-import io.github.jasoncai0.agent.permission.PermissionDecision;
-import io.github.jasoncai0.agent.permission.PermissionMode;
-import io.github.jasoncai0.agent.permission.PermissionRequest;
-import io.github.jasoncai0.agent.permission.PermissionResult;
-import io.github.jasoncai0.agent.permission.PermissionSession;
-import io.github.jasoncai0.agent.permission.PermissionScope;
-import io.github.jasoncai0.agent.question.QuestionAnswer;
-import io.github.jasoncai0.agent.question.QuestionBroker;
-import io.github.jasoncai0.agent.question.QuestionRequest;
 import io.github.jasoncai0.agent.workspace.CommandRunner;
 import io.github.jasoncai0.agent.workspace.CommandSandbox;
 import io.github.jasoncai0.agent.workspace.Workspace;
@@ -47,12 +55,14 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -60,18 +70,16 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.stream.Stream;
 
 /**
  * Owns run isolation, execution, cancellation, discovery metadata, and snapshots.
- * Each run gets a sibling directory under agent-workspaces/.
+ * Session recovery/rebasing and retention/archival live in {@link SessionRecoveryService}
+ * and {@link SessionArchiver}.
  */
 public final class AgentService implements AutoCloseable {
-    private static final ObjectMapper REBASE_MAPPER = new ObjectMapper();
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private static final int MAX_TASK_CHARS = 20_000;
     private static final int MAX_MESSAGE_CHARS = 20_000;
-    private static final int MAX_RESTORED_SESSIONS = 200;
 
     private final AppConfig config;
     private final LlmClient llm;
@@ -79,6 +87,9 @@ public final class AgentService implements AutoCloseable {
     private final ToolRegistry tools;
     private final McpManager mcp;
     private final MemoryService memory;
+    private final PendingMemoryStore pendingMemories;
+    private final MemoryAdmissionPipeline memoryPipeline;
+    private final SandboxRegistry sandboxRegistry;
     private final TeamService team;
     private final ExecutorService executor;
     private final EventStore eventStore;
@@ -103,7 +114,11 @@ public final class AgentService implements AutoCloseable {
         this.skills = SkillRegistry.load(config.skillsDir());
         this.tools = BuiltInTools.registry();
         this.mcp = McpManager.connect(config.projectRoot(), this.tools);
+        this.sandboxRegistry = new SandboxRegistry();
+        this.sandboxRegistry.validateStartup(config.sandbox());
         this.memory = MemoryServices.create(config.memory(), config.workspacesDir());
+        this.pendingMemories = PendingMemoryStores.create(config.mysql());
+        this.memoryPipeline = new MemoryAdmissionPipeline(this.memory, config.memory(), llm, this.pendingMemories);
         this.team = new TeamService(this, TeamStores.create(config.mysql()), config.teamDefault());
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
@@ -111,10 +126,7 @@ public final class AgentService implements AutoCloseable {
         } catch (IOException e) {
             throw new UncheckedIOException("Cannot create workspaces directory " + config.workspacesDir(), e);
         }
-        if (eventStore != null && eventStore.isEmpty()) {
-            migrateLegacySessions();
-        }
-        restoreRuns();
+        SessionRecoveryService.restoreAll(config, eventStore, runs);
         Log.info("agent.service.ready", Map.of(
                 "model", config.llm().model(),
                 "skills", skills.all().size(),
@@ -124,17 +136,10 @@ public final class AgentService implements AutoCloseable {
         ));
     }
 
-    /**
-     * Starts a run in a fresh, isolated directory. The optional name is a single
-     * path segment under agent-workspaces; omit it to generate a unique one.
-     */
     public RunSnapshot start(String task, String workspaceName) {
         return start(task, workspaceName, false);
     }
 
-    /**
-     * Starts a run and optionally enables Team mode before the first model turn.
-     */
     public RunSnapshot start(String task, String workspaceName, boolean teamEnabled) {
         if (closed) {
             throw new IllegalStateException("Agent service is shutting down");
@@ -166,7 +171,7 @@ public final class AgentService implements AutoCloseable {
             }
         }
 
-        String id = "run-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        String id = "run-" + UUID.randomUUID().toString().substring(0, 8);
         RunState state = new RunState(id, cleanTask, workspace.root().getFileName().toString(),
                 config.agent().maxSteps());
         RunEventLog events = new RunEventLog(id, eventStore);
@@ -200,10 +205,6 @@ public final class AgentService implements AutoCloseable {
         return state.snapshot();
     }
 
-    /**
-     * Continues a terminal session with another user message. The workspace,
-     * transcript, and event sequence survive; only the per-turn loop resets.
-     */
     public RunSnapshot followUp(String id, String message) {
         if (closed) {
             throw new IllegalStateException("Agent service is shutting down");
@@ -250,169 +251,54 @@ public final class AgentService implements AutoCloseable {
         return run.snapshot();
     }
 
-    /** New run id plus the parent it was copied from. */
     public record ForkResult(String runId, String parentRunId, String workspace) {
     }
 
-    /**
-     * Copies a finished session into a new, independent session: workspace,
-     * transcript prefix and event history. The fork starts terminal and idle;
-     * the first follow-up message opens a new turn in the copied workspace.
-     */
     public ForkResult fork(String parentId, String name) {
         if (closed) {
             throw new IllegalStateException("Agent service is shutting down");
         }
-        AgentRun parent = require(parentId);
-        RunSnapshot parentSnapshot = parent.snapshot();
-        if (parent.running() || !parentSnapshot.terminal()) {
-            throw new IllegalStateException("Only a finished session can be forked");
-        }
-        Path source = parent.workspace().root();
-        String parentWorkspace = parentSnapshot.workspace();
-        String newId = "fork-" + java.util.UUID.randomUUID().toString().substring(0, 8);
-        Workspace target;
-        String directoryName;
-        synchronized (startLock) {
-            String base = name == null || name.isBlank()
-                    ? validateName(parentWorkspace)
-                    : validateName(name);
-            directoryName = base + "-fork-" + java.util.UUID.randomUUID().toString().substring(0, 6);
-            Path directory = config.workspacesDir().resolve(directoryName).normalize();
-            if (!directory.startsWith(config.workspacesDir())) {
-                throw new IllegalArgumentException("Invalid workspace name");
-            }
-            if (Files.exists(directory)) {
-                throw new IllegalArgumentException("Workspace already exists: " + directoryName);
-            }
-            target = Workspace.open(directory);
-            WorkspaceFork.copy(source, target.root());
-        }
-
-        List<ChatMessage> messages = RunArtifacts.loadMessages(source);
-        List<AgentEvent> parentEvents = loadForkEvents(parent);
-        long forkSeq = parentEvents.stream().mapToLong(AgentEvent::seq).max().orElse(0L);
-        long now = System.currentTimeMillis();
-        List<String> files = target.listFiles(500, 8).stream()
-                .map(Workspace.FileEntry::path)
-                .toList();
-        RunSnapshot forkSnapshot = new RunSnapshot(
-                newId,
-                parentSnapshot.task(),
-                directoryName,
-                parentSnapshot.status(),
-                parentSnapshot.phase(),
-                parentSnapshot.phaseLabel(),
-                parentSnapshot.step(),
-                parentSnapshot.maxSteps(),
-                parentSnapshot.plan(),
-                files,
-                parentSnapshot.usage(),
-                parentSnapshot.finalAnswer(),
-                parentSnapshot.error(),
-                parentSnapshot.verification(),
-                now,
-                now,
-                ".agent/transcript.json",
-                parentId,
-                forkSeq
-        );
-        RunState state = RunState.restore(forkSnapshot);
-        List<AgentEvent> copiedEvents = new ArrayList<>(parentEvents.size() + 1);
-        for (AgentEvent event : parentEvents) {
-            copiedEvents.add(new AgentEvent(event.seq(), event.timestamp(), event.type(),
-                    rebase(event.data(), parentId, newId, parentWorkspace, directoryName)));
-        }
-        copiedEvents.add(new AgentEvent(forkSeq + 1, now, "fork.created", Map.of(
-                "parentRunId", parentId,
-                "parentSeq", forkSeq,
-                "workspace", directoryName,
-                "task", parentSnapshot.task()
-        )));
-        RunEventLog events = RunEventLog.restoredWithEvents(newId, eventStore, copiedEvents);
-
-        AgentRun run = new AgentRun(newId, target, state, events);
-        runs.put(newId, run);
-        team.ensureRoot(newId);
-        RunArtifacts.persist(target, state.snapshot(), messages, events);
-        if (eventStore != null) {
-            eventStore.importRun(state.snapshot(), copiedEvents);
-        }
-        Log.info("agent.run.forked", Map.of(
-                "runId", newId,
-                "parentRunId", parentId,
-                "workspace", directoryName,
-                "events", parentEvents.size()
-        ));
-        return new ForkResult(newId, parentId, directoryName);
+        return SessionForkService.fork(require(parentId), name, config.workspacesDir(),
+                startLock, eventStore, runs, team);
     }
 
-    private List<AgentEvent> loadForkEvents(AgentRun parent) {
-        List<AgentEvent> events = new ArrayList<>();
-        if (eventStore != null) {
-            long before = 0;
-            while (events.size() < 20_000) {
-                EventStore.Page page = eventStore.page(parent.id(), before, 500, true);
-                events.addAll(page.events());
-                if (!page.hasMore()) {
-                    break;
-                }
-                before = page.nextBefore();
+    public SessionArchiver.PruneResult pruneSessions(int keepCount, int maxAgeDays, boolean dryRun) {
+        return pruneSessions(keepCount, maxAgeDays, dryRun, System.currentTimeMillis());
+    }
+
+    SessionArchiver.PruneResult pruneSessions(int keepCount, int maxAgeDays, boolean dryRun, long nowMillis) {
+        Set<String> active = new HashSet<>();
+        for (AgentRun run : runs.values()) {
+            if (run.running() || !run.snapshot().terminal()) {
+                active.add(run.id());
             }
-        } else {
-            events.addAll(RunArtifacts.load(parent.workspace().root())
-                    .map(RunArtifacts.StoredRun::events)
-                    .orElse(List.of()));
         }
-        events.sort(Comparator.comparingLong(AgentEvent::seq));
-        if (events.size() > 20_000) {
-            events = new ArrayList<>(events.subList(events.size() - 20_000, events.size()));
-        }
-        return events;
-    }
-
-    /**
-     * Rewrites the parent's id and workspace inside a copied event payload so a
-     * fork never claims the parent's identity in the UI or in snapshot fields.
-     */
-    private static Map<String, Object> rebase(Map<String, Object> data, String parentId,
-                                              String newId, String parentWorkspace,
-                                              String newWorkspace) {
-        @SuppressWarnings("unchecked")
-        Map<String, Object> result = (Map<String, Object>) rebaseValue(
-                data, parentId, newId, parentWorkspace, newWorkspace);
-        return result == null ? Map.of() : result;
-    }
-
-    private static Object rebaseValue(Object value, String parentId, String newId,
-                                      String parentWorkspace, String newWorkspace) {
-        if (value != null && value.getClass().isRecord()) {
-            Object converted = REBASE_MAPPER.convertValue(value, Object.class);
-            return rebaseValue(converted, parentId, newId, parentWorkspace, newWorkspace);
-        }
-        if (value instanceof Map<?, ?> map) {
-            Map<String, Object> out = new LinkedHashMap<>();
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                String key = String.valueOf(entry.getKey());
-                Object nested = entry.getValue();
-                if (("id".equals(key) || "runId".equals(key)) && parentId.equals(nested)) {
-                    out.put(key, newId);
-                } else if ("workspace".equals(key) && parentWorkspace.equals(nested)) {
-                    out.put(key, newWorkspace);
-                } else {
-                    out.put(key, rebaseValue(nested, parentId, newId, parentWorkspace, newWorkspace));
+        SessionArchiver.PruneResult result = SessionArchiver.prune(
+                config.workspacesDir(), list(), active, eventStore,
+                new SessionArchiver.Policy(keepCount, maxAgeDays, dryRun), nowMillis);
+        if (!dryRun && !result.prunedRunIds().isEmpty()) {
+            Set<String> removedWorkspaces = new HashSet<>();
+            for (String prunedId : result.prunedRunIds()) {
+                AgentRun removed = runs.remove(prunedId);
+                if (removed != null) {
+                    removed.closeSandbox();
+                    if (removed.state().workspace() != null) {
+                        removedWorkspaces.add(removed.state().workspace());
+                    }
                 }
             }
-            return out;
-        }
-        if (value instanceof List<?> list) {
-            List<Object> out = new ArrayList<>(list.size());
-            for (Object item : list) {
-                out.add(rebaseValue(item, parentId, newId, parentWorkspace, newWorkspace));
+            if (!removedWorkspaces.isEmpty()) {
+                runs.entrySet().removeIf(entry -> {
+                    boolean match = (entry.getKey().startsWith("sub-") || entry.getKey().startsWith("team-"))
+                            && removedWorkspaces.contains(entry.getValue().state().workspace());
+                    if (match) {
+                        entry.getValue().closeSandbox();
+                    }
+                    return match;
+                });
             }
-            return out;
         }
-        return value;
+        return result;
     }
 
     private SubagentService subagents() {
@@ -428,10 +314,6 @@ public final class AgentService implements AutoCloseable {
         }
     }
 
-    /**
-     * Parent runs get a per-run registry with {@code delegate_task}; child runs
-     * never do, and their registry is also a separate read-only whitelist.
-     */
     private ToolRegistry toolsForRun(AgentRun run) {
         if (team.isMember(run)) {
             ToolRegistry registry = new ToolRegistry();
@@ -465,7 +347,7 @@ public final class AgentService implements AutoCloseable {
     }
 
     AgentRun newChildRun(AgentRun parent, String name, String task) {
-        String id = "sub-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        String id = "sub-" + UUID.randomUUID().toString().substring(0, 8);
         Workspace workspace = Workspace.open(parent.workspace().root());
         RunState state = new RunState(id, task, parent.state().workspace(), 40);
         state.markSubagent(parent.id());
@@ -489,7 +371,7 @@ public final class AgentService implements AutoCloseable {
         try {
             AgentLoop loop = new AgentLoop(
                     llm, subagentTools(), skills, childSettings(), config.llm().maxOutputTokens(),
-                    new Verifier(), new PermissionBroker(), new PermissionSession(),
+                    verifierForRun(child), new PermissionBroker(), new PermissionSession(),
                     new QuestionBroker(), GoalReviewer.NOOP)
                     .withLiveDeltas(child.deltas());
             loop.run(task, child.workspace(), child.state(), child.events(), control);
@@ -524,7 +406,7 @@ public final class AgentService implements AutoCloseable {
     }
 
     public AgentRun newTeamRun(AgentRun parent, String rootRunId, String name, String task) {
-        String id = "team-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        String id = "team-" + UUID.randomUUID().toString().substring(0, 8);
         Workspace workspace = Workspace.open(parent.workspace().root());
         RunState state = new RunState(id, task, parent.state().workspace(), config.agent().maxSteps());
         state.markSubagent(parent.id());
@@ -556,7 +438,7 @@ public final class AgentService implements AutoCloseable {
                     base.overflowRecovery(), base.preloadSkills());
             AgentLoop loop = new AgentLoop(
                     llm, toolsForRun(run), skills, teamSettings, config.llm().maxOutputTokens(),
-                    new Verifier(), run.permissions(), run.permissionSession(), run.questions(),
+                    verifierForRun(run), run.permissions(), run.permissionSession(), run.questions(),
                     GoalReviewer.NOOP, NoopMemoryService.off())
                     .withLiveDeltas(run.deltas())
                     .withTeamPolicy(team.teamPolicy(run));
@@ -594,8 +476,9 @@ public final class AgentService implements AutoCloseable {
         try {
             AgentLoop loop = new AgentLoop(
                     llm, toolsForRun(run), skills, config.agent(), config.llm().maxOutputTokens(),
-                    new Verifier(), run.permissions(), run.permissionSession(), run.questions(),
+                    verifierForRun(run), run.permissions(), run.permissionSession(), run.questions(),
                     new LlmGoalReviewer(llm), memory)
+                    .withMemoryPipeline(memoryPipeline)
                     .withLiveDeltas(run.deltas())
                     .withTeamPolicy(team.teamPolicy(run));
             RunSnapshot snapshot = continuation
@@ -662,9 +545,7 @@ public final class AgentService implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while waiting for run " + id, e);
-        } catch (ExecutionException e) {
-            return run.snapshot();
-        } catch (TimeoutException e) {
+        } catch (ExecutionException | TimeoutException e) {
             return run.snapshot();
         }
     }
@@ -710,7 +591,7 @@ public final class AgentService implements AutoCloseable {
         return team.summary(id, enabled);
     }
 
-    public io.github.jasoncai0.agent.team.TeamTask teamTask(String id, String taskId) {
+    public TeamTask teamTask(String id, String taskId) {
         AgentRun run = require(id);
         return team.task(run, taskId);
     }
@@ -757,14 +638,73 @@ public final class AgentService implements AutoCloseable {
         summary.put("toolCount", tools.names().size());
         summary.put("skillCount", skills.all().size());
         summary.put("mcp", mcp.summary());
-        summary.put("memory", memory.health().toMap());
+        Map<String, Object> memMap = new LinkedHashMap<>(memory.health().toMap());
+        if (config.memory() != null) {
+            memMap.put("admissionMode", config.memory().admissionMode().id());
+        }
+        memMap.put("pendingCount", listPendingMemories(100).size());
+        summary.put("memory", memMap);
         summary.put("teamDefaultEnabled", team.defaultEnabled());
         summary.put("languages", Language.ids());
-        CommandSandbox sandbox = new CommandRunner().sandbox();
-        summary.put("sandbox", sandbox.modeName());
-        summary.put("sandboxNetwork", sandbox.networkEnabled());
-        summary.put("sandboxDescription", sandbox.description());
+        summary.put("sandboxBackend", config.sandbox().backend());
+        summary.put("sandboxPlugin", sandboxRegistry.summary(config.sandbox()));
+        if (config.sandbox().isDocker()) {
+            summary.put("sandbox", "docker");
+            summary.put("sandboxNetwork", !"off".equals(config.sandbox().dockerNetwork()));
+            summary.put("sandboxDescription", "docker container (" + config.sandbox().dockerImage()
+                    + "; network=" + config.sandbox().dockerNetwork() + ")");
+        } else {
+            CommandSandbox sandbox = new CommandRunner().sandbox();
+            summary.put("sandbox", sandbox.modeName());
+            summary.put("sandboxNetwork", sandbox.networkEnabled());
+            summary.put("sandboxDescription", sandbox.description());
+        }
         return summary;
+    }
+
+    private Verifier verifierForRun(AgentRun run) {
+        SandboxSession session = run.sandboxSession();
+        if (session == null) {
+            synchronized (run) {
+                session = run.sandboxSession();
+                if (session == null) {
+                    String sessionId = run.state().workspace() != null && !run.state().workspace().isBlank()
+                            ? run.state().workspace()
+                            : run.id();
+                    session = sandboxRegistry.openSession(sessionId, run.workspace().root(), config.sandbox());
+                    run.setSandboxSession(session);
+                }
+            }
+        }
+        return new Verifier(new CommandRunner(session));
+    }
+
+    private MemoryScope managementMemoryScope() {
+        io.github.jasoncai0.agent.memory.MemorySettings settings = config.memory() == null
+                ? io.github.jasoncai0.agent.memory.MemorySettings.defaults()
+                : config.memory();
+        return io.github.jasoncai0.agent.memory.MemoryPolicy.scope(
+                settings, config.workspacesDir(), config.workspacesDir(), "management");
+    }
+
+    public List<PendingMemoryItem> listPendingMemories(int limit) {
+        return pendingMemories.listPending(managementMemoryScope().projectId(), limit);
+    }
+
+    public PendingMemoryItem approvePendingMemory(String id) {
+        return memoryPipeline.approvePending(id, managementMemoryScope());
+    }
+
+    public PendingMemoryItem rejectPendingMemory(String id) {
+        return memoryPipeline.rejectPending(id);
+    }
+
+    public MemoryAdmissionPipeline memoryPipeline() {
+        return memoryPipeline;
+    }
+
+    public SandboxRegistry sandboxRegistry() {
+        return sandboxRegistry;
     }
 
     public List<Map<String, Object>> toolDescriptions() {
@@ -805,142 +745,16 @@ public final class AgentService implements AutoCloseable {
         return config;
     }
 
-    /**
-     * Rehydrates recent terminal runs from {@code agent-workspaces/<name>/.agent/}.
-     * Sessions are read-only history: their executor died with the previous
-     * process, so they are not inserted into the active-workspace set.
-     */
-    private void restoreRuns() {
-        if (eventStore != null) {
-            restoreFromStore();
-            return;
-        }
-        List<Path> candidates = new ArrayList<>();
-        try (Stream<Path> entries = Files.list(config.workspacesDir())) {
-            entries.filter(Files::isDirectory)
-                    .filter(dir -> Files.isRegularFile(dir.resolve(".agent/transcript.json")))
-                    .forEach(candidates::add);
-        } catch (IOException e) {
-            Log.warn("agent.sessions.scan_failed", Map.of("error", String.valueOf(e.getMessage())));
-            return;
-        }
-        candidates.sort(Comparator.comparingLong(this::sessionModified).reversed());
-
-        int restored = 0;
-        for (Path directory : candidates) {
-            if (restored >= MAX_RESTORED_SESSIONS) {
-                break;
-            }
-            try {
-                Workspace workspace = Workspace.open(directory);
-                RunArtifacts.StoredRun stored = RunArtifacts.load(workspace.root()).orElse(null);
-                if (stored == null) {
-                    continue;
-                }
-                RunSnapshot snapshot = stored.snapshot();
-                if (runs.containsKey(snapshot.id())) {
-                    Log.warn("agent.sessions.duplicate", Map.of("runId", snapshot.id(),
-                            "workspace", workspace.root().getFileName().toString()));
-                    continue;
-                }
-                RunState state = RunState.restore(snapshot);
-                RunEventLog events = RunEventLog.restore(stored.events());
-                AgentRun run = new AgentRun(snapshot.id(), workspace, state, events);
-                runs.put(snapshot.id(), run);
-                restored++;
-            } catch (RuntimeException e) {
-                Log.warn("agent.sessions.restore_failed", Map.of(
-                        "workspace", directory.getFileName().toString(),
-                        "error", String.valueOf(e.getMessage())));
-            }
-        }
-        Log.info("agent.sessions.restored", Map.of(
-                "restored", restored,
-                "candidates", candidates.size()));
-    }
-
-    private void restoreFromStore() {
-        int restored = 0;
-        for (RunSnapshot stored : eventStore.snapshots(MAX_RESTORED_SESSIONS)) {
-            try {
-                if (runs.containsKey(stored.id())) continue;
-                Path directory = config.workspacesDir().resolve(stored.workspace()).normalize();
-                if (!directory.startsWith(config.workspacesDir()) || !Files.isDirectory(directory)) {
-                    continue;
-                }
-                Workspace workspace = Workspace.open(directory);
-                RunSnapshot persisted = stored;
-                // A previous process may have died after the terminal event but
-                // before jade_sessions was updated. Prefer the durable terminal
-                // event/transcript from the workspace over the stale summary.
-                if (!stored.terminal()) {
-                    RunSnapshot recovered = RunArtifacts.load(workspace.root())
-                            .map(RunArtifacts.StoredRun::snapshot)
-                            .filter(RunSnapshot::terminal)
-                            .orElse(null);
-                    if (recovered != null) {
-                        stored = recovered;
-                    }
-                }
-                RunState state = RunState.restore(stored);
-                RunSnapshot normalized = state.snapshot();
-                if (!normalized.status().equals(persisted.status())
-                        || !java.util.Objects.equals(normalized.error(), persisted.error())) {
-                    eventStore.saveSnapshot(normalized);
-                }
-                RunEventLog events = RunEventLog.restored(stored.id(), eventStore,
-                        eventStore.lastSeq(stored.id()));
-                runs.put(stored.id(), new AgentRun(stored.id(), workspace, state, events));
-                restored++;
-            } catch (RuntimeException e) {
-                Log.warn("agent.sessions.mysql_restore_failed", Map.of(
-                        "runId", stored.id(),
-                        "error", String.valueOf(e.getMessage())));
-            }
-        }
-        Log.info("agent.sessions.restored", Map.of("restored", restored, "store", "mysql"));
-    }
-
-    /** One-time import of pre-MySQL transcript/event files. */
-    private void migrateLegacySessions() {
-        int imported = 0;
-        try (Stream<Path> entries = Files.list(config.workspacesDir())) {
-            for (Path directory : entries.filter(Files::isDirectory).toList()) {
-                if (!Files.isRegularFile(directory.resolve(".agent/transcript.json"))) continue;
-                try {
-                    Workspace workspace = Workspace.open(directory);
-                    RunArtifacts.StoredRun stored = RunArtifacts.load(workspace.root()).orElse(null);
-                    if (stored == null) continue;
-                    eventStore.importRun(stored.snapshot(), stored.events());
-                    imported++;
-                } catch (RuntimeException e) {
-                    Log.warn("agent.migration.skip", Map.of(
-                            "workspace", directory.getFileName().toString(),
-                            "error", String.valueOf(e.getMessage())));
-                }
-            }
-        } catch (IOException e) {
-            Log.warn("agent.migration.scan_failed", Map.of("error", String.valueOf(e.getMessage())));
-        }
-        Log.info("agent.sessions.migrated", Map.of("imported", imported));
-    }
-
-    private long sessionModified(Path directory) {
-        try {
-            return Files.getLastModifiedTime(directory.resolve(".agent/transcript.json")).toMillis();
-        } catch (IOException e) {
-            return 0L;
-        }
-    }
-
     private static EventStore createStore(AppConfig config) {
-        if (config.mysql() == null) return null;
+        if (config.mysql() == null) {
+            return null;
+        }
         return new MySqlEventStore(config.mysql());
     }
 
     private String uniqueName() {
         for (int attempt = 0; attempt < 20; attempt++) {
-            String suffix = java.util.UUID.randomUUID().toString().substring(0, 6);
+            String suffix = UUID.randomUUID().toString().substring(0, 6);
             String candidate = "run-" + LocalDateTime.now().format(STAMP) + "-" + suffix;
             if (!Files.exists(config.workspacesDir().resolve(candidate))) {
                 return candidate;
@@ -949,7 +763,7 @@ public final class AgentService implements AutoCloseable {
         throw new IllegalStateException("Could not allocate a unique workspace name");
     }
 
-    private static String validateName(String raw) {
+    static String validateName(String raw) {
         String name = raw.strip();
         if (!name.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,80}") || name.contains("..")) {
             throw new IllegalArgumentException(
@@ -959,28 +773,11 @@ public final class AgentService implements AutoCloseable {
     }
 
     public EventStore.Page history(String id, long before, int limit, boolean compact) {
-        require(id);
-        if (eventStore == null) {
-            List<AgentEvent> events = require(id).events().snapshot();
-            long max = events.stream().mapToLong(AgentEvent::seq).max().orElse(0);
-            List<AgentEvent> filtered = events.stream()
-                    .filter(e -> before <= 0 || e.seq() < before)
-                    .toList();
-            int safeLimit = Math.max(1, limit);
-            int from = Math.max(0, filtered.size() - safeLimit);
-            List<AgentEvent> tail = filtered.subList(from, filtered.size());
-            long next = tail.isEmpty() ? before : tail.get(0).seq();
-            return new EventStore.Page(tail, next, from > 0, max, events.size());
-        }
-        return eventStore.page(id, before, limit, compact);
+        return SessionForkService.history(require(id), eventStore, before, limit, compact);
     }
 
     public Optional<AgentEvent> fullEvent(String id, long seq) {
-        require(id);
-        if (eventStore == null) {
-            return require(id).events().snapshot().stream().filter(e -> e.seq() == seq).findFirst();
-        }
-        return eventStore.event(id, seq);
+        return SessionForkService.fullEvent(require(id), eventStore, seq);
     }
 
     @Override
@@ -1003,7 +800,9 @@ public final class AgentService implements AutoCloseable {
         team.close();
         mcp.close();
         memory.close();
+        pendingMemories.close();
         for (AgentRun run : runs.values()) {
+            run.closeSandbox();
             run.permissions().close();
             run.questions().close();
             run.events().close();

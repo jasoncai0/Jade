@@ -2,6 +2,7 @@ package io.github.jasoncai0.agent.agent;
 
 import io.github.jasoncai0.agent.permission.PermissionSession;
 import io.github.jasoncai0.agent.question.QuestionBroker;
+import io.github.jasoncai0.agent.sandbox.SandboxSession;
 import io.github.jasoncai0.agent.workspace.Workspace;
 
 import java.util.concurrent.CompletableFuture;
@@ -25,6 +26,7 @@ public final class AgentRun {
     private final long createdAt = System.currentTimeMillis();
     private volatile RunControl control = new RunControl();
     private volatile CompletableFuture<RunSnapshot> completion;
+    private volatile SandboxSession sandboxSession;
 
     AgentRun(String id, Workspace workspace, RunState state, RunEventLog events) {
         this.id = id;
@@ -103,5 +105,21 @@ public final class AgentRun {
 
     public RunSnapshot snapshot() {
         return state.snapshot();
+    }
+
+    public SandboxSession sandboxSession() {
+        return sandboxSession;
+    }
+
+    public void setSandboxSession(SandboxSession sandboxSession) {
+        this.sandboxSession = sandboxSession;
+    }
+
+    public void closeSandbox() {
+        SandboxSession current = this.sandboxSession;
+        this.sandboxSession = null;
+        if (current != null) {
+            current.stop();
+        }
     }
 }

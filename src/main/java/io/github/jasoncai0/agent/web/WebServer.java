@@ -142,12 +142,21 @@ public final class WebServer implements AutoCloseable {
             data.put("apiKeyConfigured", agentService.config().hasApiKey());
             data.put("maxSteps", agentService.config().agent().maxSteps());
             data.put("runs", agentService.list().size());
-            io.github.jasoncai0.agent.workspace.CommandSandbox sandbox =
-                    new io.github.jasoncai0.agent.workspace.CommandRunner().sandbox();
-            data.put("sandbox", sandbox.modeName());
-            data.put("sandboxActive", sandbox.active());
-            data.put("sandboxNetwork", sandbox.networkEnabled());
-            data.put("sandboxDescription", sandbox.description());
+            data.put("sandboxBackend", agentService.config().sandbox().backend());
+            if (agentService.config().sandbox().isDocker()) {
+                data.put("sandbox", "docker");
+                data.put("sandboxActive", true);
+                data.put("sandboxNetwork", !"off".equals(agentService.config().sandbox().dockerNetwork()));
+                data.put("sandboxDescription", "docker container (" + agentService.config().sandbox().dockerImage()
+                        + "; network=" + agentService.config().sandbox().dockerNetwork() + ")");
+            } else {
+                io.github.jasoncai0.agent.workspace.CommandSandbox sandbox =
+                        new io.github.jasoncai0.agent.workspace.CommandRunner().sandbox();
+                data.put("sandbox", sandbox.modeName());
+                data.put("sandboxActive", sandbox.active());
+                data.put("sandboxNetwork", sandbox.networkEnabled());
+                data.put("sandboxDescription", sandbox.description());
+            }
             sendData(exchange, 200, data);
             return;
         }
@@ -170,7 +179,36 @@ public final class WebServer implements AutoCloseable {
         if (path.equals("/api/memory") && method.equals("GET")) {
             io.github.jasoncai0.agent.memory.MemoryScope scope = agentService.memory()
                     .scope(agentService.config().workspacesDir(), "management");
-            sendData(exchange, 200, agentService.memory().list(scope, 100));
+            boolean includeAll = "1".equals(queryParam(exchange.getRequestURI(), "all"));
+            long now = System.currentTimeMillis();
+            var list = agentService.memory().list(scope, 100).stream()
+                    .filter(item -> includeAll || io.github.jasoncai0.agent.memory.MemoryPolicy.isActive(item, now))
+                    .toList();
+            sendData(exchange, 200, list);
+            return;
+        }
+        if (path.equals("/api/memory/pending") && method.equals("GET")) {
+            var pending = agentService.listPendingMemories(100).stream()
+                    .map(io.github.jasoncai0.agent.memory.admission.PendingMemoryItem::toMap)
+                    .toList();
+            sendData(exchange, 200, pending);
+            return;
+        }
+        if (path.startsWith("/api/memory/pending/") && method.equals("POST")) {
+            String restPending = path.substring("/api/memory/pending/".length());
+            String[] pSegs = restPending.split("/");
+            if (pSegs.length == 2 && !pSegs[0].isBlank()) {
+                String pendingId = URLDecoder.decode(pSegs[0], StandardCharsets.UTF_8);
+                if ("approve".equals(pSegs[1])) {
+                    sendData(exchange, 200, agentService.approvePendingMemory(pendingId).toMap());
+                    return;
+                }
+                if ("reject".equals(pSegs[1])) {
+                    sendData(exchange, 200, agentService.rejectPendingMemory(pendingId).toMap());
+                    return;
+                }
+            }
+            sendError(exchange, 404, "Unknown memory pending endpoint");
             return;
         }
         if (path.equals("/api/memory/export") && method.equals("GET")) {
@@ -202,6 +240,18 @@ public final class WebServer implements AutoCloseable {
                 return;
             }
             sendError(exchange, 405, "Method not allowed");
+            return;
+        }
+        if (path.equals("/api/runs/prune") && method.equals("POST")) {
+            JsonNode body = readJson(exchange);
+            int keep = body != null && body.has("keepCount")
+                    ? body.path("keepCount").asInt(io.github.jasoncai0.agent.history.SessionArchiver.DEFAULT_KEEP_COUNT)
+                    : io.github.jasoncai0.agent.history.SessionArchiver.DEFAULT_KEEP_COUNT;
+            int days = body != null && body.has("maxAgeDays")
+                    ? body.path("maxAgeDays").asInt(io.github.jasoncai0.agent.history.SessionArchiver.DEFAULT_MAX_AGE_DAYS)
+                    : io.github.jasoncai0.agent.history.SessionArchiver.DEFAULT_MAX_AGE_DAYS;
+            boolean dryRun = body != null && body.path("dryRun").asBoolean(false);
+            sendData(exchange, 200, agentService.pruneSessions(keep, days, dryRun).toMap());
             return;
         }
         if (!path.startsWith("/api/runs/")) {

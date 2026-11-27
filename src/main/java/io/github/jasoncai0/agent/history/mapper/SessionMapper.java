@@ -14,4 +14,6 @@ public interface SessionMapper {
     String findSnapshot(@Param("runId") String runId);
 
     long countSessions();
+
+    int deleteByRunIds(@Param("runIds") List<String> runIds);
 }

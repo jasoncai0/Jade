@@ -1,7 +1,7 @@
 # Jade 沙箱方案（设计稿）
 
-> 状态：方向已确认，待实现
-> 日期：2026-11-15  
+> 状态：已实现（`io.github.jasoncai0.agent.sandbox.*`、`sandbox/Dockerfile`、`scripts/build-sandbox-image.sh`）
+> 日期：2026-11-27  
 > 决策：**本地默认执行；沙箱作为可选插件，不强制。**
 > 适用项目：`java-coding-agent`（Jade 1.0.0）
 

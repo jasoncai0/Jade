@@ -1,5 +1,9 @@
 package io.github.jasoncai0.agent.workspace;
 
+import io.github.jasoncai0.agent.sandbox.LocalSandboxSession;
+import io.github.jasoncai0.agent.sandbox.SandboxInfo;
+import io.github.jasoncai0.agent.sandbox.SandboxSession;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -17,21 +21,6 @@ import java.util.regex.Pattern;
 
 public final class CommandRunner {
     private static final int MAX_CAPTURE_CHARS = 200_000;
-    private final CommandSandbox sandbox;
-
-    public CommandRunner() {
-        this(CommandSandbox.fromEnvironment());
-    }
-
-    public CommandRunner(CommandSandbox sandbox) {
-        this.sandbox = sandbox == null ? CommandSandbox.fromEnvironment() : sandbox;
-    }
-
-    public CommandSandbox sandbox() {
-        return sandbox;
-    }
-    private static final boolean WINDOWS = System.getProperty("os.name", "")
-            .toLowerCase().contains("win");
     private static final Set<String> SENSITIVE_EXACT = Set.of(
             "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GH_TOKEN", "GITHUB_TOKEN",
             "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
@@ -46,20 +35,61 @@ public final class CommandRunner {
             Pattern.compile("(?im)\\brm\\s+-[a-z]*r[a-z]*f[a-z]*\\s+(/|~)(\\s|$)")
     );
 
+    private final CommandSandbox sandbox;
+    private final SandboxSession session;
+
+    public CommandRunner() {
+        this(CommandSandbox.fromEnvironment());
+    }
+
+    public CommandRunner(CommandSandbox sandbox) {
+        CommandSandbox safe = sandbox == null ? CommandSandbox.fromEnvironment() : sandbox;
+        this.sandbox = safe;
+        this.session = new LocalSandboxSession(safe);
+    }
+
+    public CommandRunner(SandboxSession session) {
+        if (session == null) {
+            CommandSandbox safe = CommandSandbox.fromEnvironment();
+            this.sandbox = safe;
+            this.session = new LocalSandboxSession(safe);
+        } else if (session instanceof LocalSandboxSession local) {
+            this.sandbox = local.commandSandbox();
+            this.session = local;
+        } else {
+            this.sandbox = CommandSandbox.off();
+            this.session = session;
+        }
+    }
+
+    public CommandSandbox sandbox() {
+        return sandbox;
+    }
+
+    public SandboxSession session() {
+        return session;
+    }
+
+    public SandboxInfo sandboxInfo() {
+        return session.info();
+    }
+
+    public boolean isContainer() {
+        return session.info().containerIsolated();
+    }
+
     public CommandResult run(List<String> argv, Path cwd, int timeoutSeconds) {
         return run(argv, cwd, timeoutSeconds, cwd);
     }
 
     /**
-     * Runs a command with writes confined to {@code writableRoot} when the OS
-     * sandbox is active. The original argv is returned for display; the wrapped
-     * argv is never copied into the result.
+     * Runs a command confined to the active {@link SandboxSession} (local write jail
+     * by default, or hardened Docker container when {@code AGENT_SANDBOX_BACKEND=docker}).
      */
     public CommandResult run(List<String> argv, Path cwd, int timeoutSeconds, Path writableRoot) {
         return run(argv, cwd, timeoutSeconds, writableRoot, Map.of());
     }
 
-    /** Runs a command with extra environment variables applied after the sandbox setup. */
     public CommandResult run(List<String> argv, Path cwd, int timeoutSeconds,
                              Path writableRoot, Map<String, String> extraEnvironment) {
         return run(argv, cwd, timeoutSeconds, writableRoot, extraEnvironment, false);
@@ -68,15 +98,39 @@ public final class CommandRunner {
     public CommandResult run(List<String> argv, Path cwd, int timeoutSeconds,
                              Path writableRoot, Map<String, String> extraEnvironment,
                              boolean allowNetwork) {
+        return session.exec(argv, cwd, timeoutSeconds, writableRoot, extraEnvironment, allowNetwork);
+    }
+
+    public CommandResult runShell(String command, Path cwd, int timeoutSeconds) {
+        return runShell(command, cwd, timeoutSeconds, cwd);
+    }
+
+    public CommandResult runShell(String command, Path cwd, int timeoutSeconds, Path writableRoot) {
+        return runShell(command, cwd, timeoutSeconds, writableRoot, false);
+    }
+
+    public CommandResult runShell(String command, Path cwd, int timeoutSeconds, Path writableRoot,
+                                  boolean allowNetwork) {
+        return session.execShell(command, cwd, timeoutSeconds, writableRoot, allowNetwork);
+    }
+
+    /** Shared low-level host process launcher used by {@link LocalSandboxSession} and Docker CLI invocations. */
+    public static CommandResult execLocalProcess(CommandSandbox sandbox, List<String> argv, Path cwd,
+                                                 int timeoutSeconds, Path writableRoot,
+                                                 Map<String, String> extraEnvironment,
+                                                 boolean allowNetwork) {
         if (argv == null || argv.isEmpty()) {
             throw new CommandRejectedException("Command must not be empty");
         }
         int timeout = Math.max(1, Math.min(timeoutSeconds, 600));
         Path root = writableRoot == null ? cwd : writableRoot;
-        ProcessBuilder builder = new ProcessBuilder(sandbox.wrap(argv, root, allowNetwork));
+        CommandSandbox effectiveSandbox = sandbox == null ? CommandSandbox.off() : sandbox;
+        ProcessBuilder builder = new ProcessBuilder(effectiveSandbox.wrap(argv, root, allowNetwork));
         builder.directory(cwd.toFile());
         sanitizeEnvironment(builder.environment());
-        sandbox.prepare(builder, root, allowNetwork);
+        if (effectiveSandbox.active() || !allowNetwork) {
+            effectiveSandbox.prepare(builder, root, allowNetwork);
+        }
         if (extraEnvironment != null) {
             extraEnvironment.forEach((key, value) -> {
                 if (key != null && value != null) {
@@ -142,26 +196,6 @@ public final class CommandRunner {
         }
     }
 
-    public CommandResult runShell(String command, Path cwd, int timeoutSeconds) {
-        return runShell(command, cwd, timeoutSeconds, cwd);
-    }
-
-    public CommandResult runShell(String command, Path cwd, int timeoutSeconds, Path writableRoot) {
-        return runShell(command, cwd, timeoutSeconds, writableRoot, false);
-    }
-
-    public CommandResult runShell(String command, Path cwd, int timeoutSeconds, Path writableRoot,
-                                  boolean allowNetwork) {
-        if (command == null || command.isBlank()) {
-            throw new CommandRejectedException("Command must not be blank");
-        }
-        guard(command);
-        List<String> argv = WINDOWS
-                ? List.of("cmd.exe", "/c", command)
-                : List.of("/bin/sh", "-c", command);
-        return run(argv, cwd, timeoutSeconds, writableRoot, Map.of(), allowNetwork);
-    }
-
     public static void guard(String command) {
         for (Pattern pattern : BLOCKED) {
             if (pattern.matcher(command).find()) {
@@ -171,16 +205,21 @@ public final class CommandRunner {
         }
     }
 
+    public static boolean isSensitiveEnvName(String key) {
+        if (key == null) return false;
+        return SENSITIVE_EXACT.contains(key)
+                || key.endsWith("_API_KEY")
+                || key.endsWith("_SECRET")
+                || key.endsWith("_TOKEN")
+                || key.endsWith("_PASSWORD")
+                || key.endsWith("_PASSWD")
+                || key.endsWith("_PRIVATE_KEY");
+    }
+
     private static void sanitizeEnvironment(Map<String, String> env) {
         List<String> remove = new ArrayList<>();
         for (String key : env.keySet()) {
-            if (SENSITIVE_EXACT.contains(key)
-                    || key.endsWith("_API_KEY")
-                    || key.endsWith("_SECRET")
-                    || key.endsWith("_TOKEN")
-                    || key.endsWith("_PASSWORD")
-                    || key.endsWith("_PASSWD")
-                    || key.endsWith("_PRIVATE_KEY")) {
+            if (isSensitiveEnvName(key)) {
                 remove.add(key);
             }
         }

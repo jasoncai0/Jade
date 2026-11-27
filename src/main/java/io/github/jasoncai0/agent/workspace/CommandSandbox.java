@@ -53,6 +53,10 @@ public final class CommandSandbox {
         return create(mode, network, MACOS_SANDBOX);
     }
 
+    public static CommandSandbox off() {
+        return new CommandSandbox(Mode.OFF, true, MACOS_SANDBOX, false);
+    }
+
     static CommandSandbox create(Mode mode, boolean network, Path executable) {
         boolean available = executable != null && Files.isExecutable(executable);
         if (mode == Mode.REQUIRED && !available) {

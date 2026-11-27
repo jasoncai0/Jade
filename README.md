@@ -67,6 +67,8 @@ Other modes:
 ./run.sh --version
 ./run.sh --check
 ./run.sh --ping
+./run.sh --prune --dry-run
+./run.sh --prune --keep 200 --older-than-days 30
 ./run.sh --port 9090
 ```
 
@@ -647,15 +649,22 @@ Environment variables take precedence over `.env`:
 | `AGENT_COMMAND_TIMEOUT_SECONDS` | `120` | default command timeout |
 | `AGENT_AUTO_VERIFY` | `true` | compile gate before final answer |
 | `AGENT_GOAL_MODE` | `true` | independent goal review before success |
-| `AGENT_SANDBOX` | `off` | `off` (default local execution), `auto`, or `required`; macOS write jail |
-| `AGENT_SANDBOX_NETWORK` | `false` | allow network inside the sandbox |
+| `AGENT_SANDBOX_BACKEND` | `local` | `local` (default host toolchain) or `docker` (hardened container session; fail-closed) |
+| `AGENT_SANDBOX` | `off` | `off` (default local execution), `auto`, or `required`; macOS write jail when backend is `local` |
+| `AGENT_SANDBOX_NETWORK` | `false` | allow network inside the local macOS jail |
+| `AGENT_SANDBOX_DOCKER_IMAGE` | `jade-sandbox:1` | container image used when `AGENT_SANDBOX_BACKEND=docker` (`./scripts/build-sandbox-image.sh`) |
+| `AGENT_SANDBOX_DOCKER_NETWORK` | `off` | `off`, `on`, or `preview` for Docker sandbox sessions |
 | `AGENT_HOST` | `127.0.0.1` | HTTP bind address |
 | `AGENT_PORT` | `8080` | HTTP port, `0` chooses a free port |
+| `AGENT_WEB_TOKEN` | empty | mandatory Bearer token when `AGENT_HOST` is non-loopback |
 | `AGENT_SKILLS_DIR` | `skills` | skill root |
 | `AGENT_SKILL_PRELOAD` | `true` | preload top-2 skill bodies (≤4,000 chars each); `false` = catalog only, load on demand |
 | `AGENT_WORKSPACES_DIR` | `agent-workspaces` | run root |
 | `AGENT_TEAM_ENABLED` | `false` | default for new root sessions; per-session toggle |
 | `AGENT_MEMORY_MODE` | `on` | `on`, `shadow`, or `off`; missing sidecar falls back to no-op |
+| `AGENT_MEMORY_ADMISSION` | `hybrid` | `hybrid` (default), `llm`, `heuristic`, or `off` |
+| `AGENT_MEMORY_AUTO_THRESHOLD` | `0.85` | minimum confidence with verbatim user quote for auto-write (`infer=false`) |
+| `AGENT_MEMORY_REVIEW_THRESHOLD` | `0.60` | minimum confidence for Pending review inbox (`/api/memory/pending`) |
 | `AGENT_MEMORY_URL` | `http://127.0.0.1:8888` | Mem0 OSS REST endpoint |
 | `AGENT_MEMORY_PROVIDER` | `mem0-oss` | provider label |
 | `AGENT_MEMORY_API_KEY` | empty | optional `X-API-Key` for Mem0 |
@@ -671,9 +680,10 @@ Environment variables take precedence over `.env`:
 
 ```bash
 mvn test
+(cd e2e && npx playwright test)
 ```
 
-The suite has 163 tests:
+The Maven suite has 175 tests plus Playwright browser E2E tests:
 
 - workspace traversal, symlink escape, binary/oversize rejection
 - skill discovery, frontmatter parsing, ranking, duplicate handling

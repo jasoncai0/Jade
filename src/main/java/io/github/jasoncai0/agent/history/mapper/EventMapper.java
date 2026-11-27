@@ -27,4 +27,6 @@ public interface EventMapper {
     long eventCount(@Param("runId") String runId);
 
     Integer existsBefore(@Param("runId") String runId, @Param("seq") long seq);
+
+    int deleteByRunIds(@Param("runIds") List<String> runIds);
 }

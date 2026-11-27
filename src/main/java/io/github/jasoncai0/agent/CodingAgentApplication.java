@@ -81,9 +81,37 @@ public final class CodingAgentApplication {
         return switch (options.mode()) {
             case CHECK -> check(config);
             case PING -> ping(config);
+            case PRUNE -> prune(config, options);
             case TASK -> headless(config, options);
             case SERVE -> serve(config);
         };
+    }
+
+    private int prune(AppConfig config, CliOptions options) {
+        int keep = options.keepCount() == null
+                ? io.github.jasoncai0.agent.history.SessionArchiver.DEFAULT_KEEP_COUNT
+                : options.keepCount();
+        int days = options.olderThanDays() == null
+                ? io.github.jasoncai0.agent.history.SessionArchiver.DEFAULT_MAX_AGE_DAYS
+                : options.olderThanDays();
+        try (AgentService service = new AgentService(config)) {
+            var result = service.pruneSessions(keep, days, options.dryRun());
+            System.out.println("Jade session retention (" + (result.dryRun() ? "dry-run" : "applied") + ")");
+            System.out.println("scanned          " + result.scanned());
+            System.out.println("kept             " + result.kept());
+            System.out.println("pruned           " + result.prunedRunIds().size());
+            System.out.println("archive root     " + result.archiveRoot());
+            if (!result.dryRun()) {
+                System.out.println("db rows deleted  " + result.deletedDbRows());
+            }
+            for (String id : result.prunedRunIds()) {
+                System.out.println("  - " + id);
+            }
+            return 0;
+        } catch (RuntimeException e) {
+            System.err.println("Prune failed: " + e.getMessage());
+            return 1;
+        }
     }
 
     private int check(AppConfig config) {
@@ -105,7 +133,12 @@ public final class CodingAgentApplication {
         System.out.println("auto verify      " + config.agent().autoVerify());
         System.out.println("overflow recovery " + config.agent().overflowRecovery());
         System.out.println("skill preload    " + config.agent().preloadSkills());
-        System.out.println("sandbox          " + new CommandRunner().sandbox().description());
+        io.github.jasoncai0.agent.sandbox.SandboxRegistry sandboxRegistry =
+                new io.github.jasoncai0.agent.sandbox.SandboxRegistry();
+        System.out.println("sandbox backend  " + config.sandbox().backend()
+                + " | providers=" + sandboxRegistry.providerIds()
+                + " | docker=" + sandboxRegistry.summary(config.sandbox()).get("dockerDetail"));
+        System.out.println("local jail       " + new CommandRunner().sandbox().description());
         boolean mysqlReady = false;
         if (config.mysql() == null) {
             System.out.println("mysql            not configured (history falls back to local artifacts)");
@@ -172,6 +205,12 @@ public final class CodingAgentApplication {
         System.out.println();
         if (!javacResult.success()) {
             System.err.println("JDK compiler is required for the demo.");
+            return 1;
+        }
+        try {
+            sandboxRegistry.validateStartup(config.sandbox());
+        } catch (RuntimeException e) {
+            System.err.println("Sandbox check failed: " + e.getMessage());
             return 1;
         }
         if (config.mysql() != null && !mysqlReady) {
@@ -463,6 +502,6 @@ public final class CodingAgentApplication {
                     server.authToken());
         }
         return new AppConfig(config.projectRoot(), config.skillsDir(), config.workspacesDir(),
-                config.llm(), agent, server, config.mysql(), config.memory(), config.teamDefault());
+                config.llm(), agent, server, config.mysql(), config.memory(), config.teamDefault(), config.sandbox());
     }
 }

@@ -103,6 +103,41 @@ class AgentServiceRetentionTest {
         }
     }
 
+    @Test
+    void prunesExcessFinishedSessionsAndArchivesTheirAgentArtifacts() throws Exception {
+        AppConfig config = config();
+        ScriptedLlm llm = new ScriptedLlm();
+        llm.script.add(new ChatResult("one", null, List.of(), "stop", new Usage(1, 1, 2)));
+        llm.script.add(new ChatResult("two", null, List.of(), "stop", new Usage(1, 1, 2)));
+        llm.script.add(new ChatResult("three", null, List.of(), "stop", new Usage(1, 1, 2)));
+
+        try (AgentService service = new AgentService(config, llm)) {
+            RunSnapshot r1 = service.start("first", "ws-1");
+            service.await(r1.id(), Duration.ofSeconds(5));
+            Thread.sleep(15);
+            RunSnapshot r2 = service.start("second", "ws-2");
+            service.await(r2.id(), Duration.ofSeconds(5));
+            Thread.sleep(15);
+            RunSnapshot r3 = service.start("third", "ws-3");
+            service.await(r3.id(), Duration.ofSeconds(5));
+
+            var dry = service.pruneSessions(1, 90, true);
+            assertTrue(dry.dryRun());
+            assertEquals(2, dry.prunedRunIds().size());
+            assertEquals(3, service.list().size());
+
+            var applied = service.pruneSessions(1, 90, false);
+            assertEquals(2, applied.prunedRunIds().size());
+            assertEquals(1, service.list().size());
+            assertEquals(r3.id(), service.list().get(0).id());
+            assertTrue(Files.isDirectory(config.workspacesDir().resolve(".archives")));
+            try (var walk = Files.walk(config.workspacesDir().resolve(".archives"))) {
+                long archivedTranscripts = walk.filter(p -> p.getFileName().toString().equals("transcript.json")).count();
+                assertEquals(2, archivedTranscripts);
+            }
+        }
+    }
+
     private AppConfig config() throws Exception {
         Path root = temp.resolve("app");
         Path skills = root.resolve("skills");

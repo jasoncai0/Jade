@@ -4,10 +4,12 @@ import io.github.jasoncai0.agent.language.Language;
 import io.github.jasoncai0.agent.tool.builtin.BuiltInTools;
 import io.github.jasoncai0.agent.workspace.CommandRunner;
 import io.github.jasoncai0.agent.workspace.Workspace;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -18,6 +20,14 @@ class MultiLanguageVerifierTest {
     Path temp;
 
     private final Verifier verifier = new Verifier();
+
+    private boolean toolAvailable(String binary, String versionFlag) {
+        try {
+            return new CommandRunner().run(List.of(binary, versionFlag), temp, 5).success();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
 
     @Test
     void verifiesAndRunsPython() throws Exception {
@@ -51,6 +61,7 @@ class MultiLanguageVerifierTest {
 
     @Test
     void verifiesAndRunsGo() throws Exception {
+        Assumptions.assumeTrue(toolAvailable("go", "version"), "go toolchain is not installed on PATH");
         Workspace workspace = Workspace.open(temp.resolve("go"));
         workspace.writeText("main.go", """
                 package main
