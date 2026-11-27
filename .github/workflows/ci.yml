@@ -33,6 +33,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache: false
       - name: Check frontend syntax
         run: node --check src/main/resources/web/app.js
       - name: Run Maven tests and shaded package

@@ -62,6 +62,7 @@
 | 31 | 2026-11-27 | CI 多语言环境 | GitHub Actions `ubuntu-latest` 通过，`macos-latest` 在 `MultiLanguageVerifierTest.verifiesAndRunsGo` 报 `Cannot run program "go"` | macOS 15 arm64 runner 默认未注入 Go 到 `PATH`，工作流漏配 `setup-go`，测试也未在缺工具链时跳过 | CI 增加 `actions/setup-go@v5` 覆盖双平台真实 Go 构建；单测补 `Assumptions.assumeTrue` 兼容无 Go 开发机 | 环境 3.3 |
 | 32 | 2026-11-27 | 容器内 JDK 路径 | macOS 宿主机开启 `AGENT_SANDBOX_BACKEND=docker` 时，若按 `java.home` 拼 `/Library/Java/.../bin/javac`，Linux 容器内报不存在 | `Verifier.javaTool()` 无条件取宿主机 `System.getProperty("java.home")` 绝对路径 | `runner.isContainer()` 为真时改走容器 `PATH` 上的 `javac` / `java` | 环境 2.2 |
 | 33 | 2026-11-27 | 降级态记忆作用域 | `AGENT_MEMORY_MODE=off` 或 Mem0 不可达回退 `NoopMemoryService` 时，`/api/memory/pending` 查不到自定义 `AGENT_MEMORY_PROJECT_ID` 下的待审项 | `NoopMemoryService.scope()` 硬编码 `MemorySettings.defaults()`，丢失了 `AppConfig` 中的 `projectId` 与 `workspacesRoot` | `NoopMemoryService` 保留传入的 `MemorySettings` 与 `workspacesRoot`，保证降级态与在线态 `projectId` 一致 | Mem0 11.7 |
+| 34 | 2026-11-27 | 前端 SSE 与 POST 竞态 | Ubuntu CI Playwright 审批卡片点击 Allow once 后，会话实际已完成但顶部状态徽章永久卡在 `running` | 后端在 `POST /permissions` 返回与前端 `await api()` 微任务恢复之间已通过 SSE 推完 `run.finished`（置 `state.terminal=true`），随后 `respondPermission` 无条件执行 `setRunStatus('RUNNING')` 覆盖终态 | `respondPermission` 与 `respondQuestion` 仅在 `!state.terminal` 时回写 `RUNNING`；`loadInitial` 校验 `selectionToken` 防止异步覆盖新建会话页 | 会话 1.2 |
 
 ## 发布记录
 

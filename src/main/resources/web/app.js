@@ -1085,7 +1085,7 @@ async function respondPermission(decision, scope) {
       body: JSON.stringify({ decision, scope })
     });
     hidePermissionCard();
-    setRunStatus('RUNNING');
+    if (!state.terminal) setRunStatus('RUNNING');
     toast(decision === 'allow' ? 'Permission granted.' : 'Permission denied.');
   } catch (error) {
     if (card) card.querySelectorAll('button').forEach((button) => { button.disabled = false; });
@@ -1189,7 +1189,7 @@ async function respondQuestion(mode) {
       body: JSON.stringify({ selected, text })
     });
     hideQuestionCard();
-    setRunStatus('RUNNING');
+    if (!state.terminal) setRunStatus('RUNNING');
     toast('Decision sent. The agent is continuing.');
   } catch (error) {
     card.querySelectorAll('button, input, textarea').forEach((node) => { node.disabled = false; });
