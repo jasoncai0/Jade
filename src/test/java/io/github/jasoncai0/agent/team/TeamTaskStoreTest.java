@@ -50,4 +50,41 @@ class TeamTaskStoreTest {
         store.setEnabled("root", false);
         assertFalse(store.enabled("root"));
     }
+
+    @Test
+    void mysqlStoreAllocatesSequentialIdsAtomicallyAndOrdersPastTen() {
+        io.github.jasoncai0.agent.config.MysqlSettings settings =
+                new io.github.jasoncai0.agent.config.MysqlSettings(
+                        io.github.jasoncai0.agent.config.MysqlSettings.DEFAULT_URL, "jade", "jade_dev_password");
+        MySqlTeamTaskStore store;
+        try (java.sql.Connection ignored = java.sql.DriverManager.getConnection(
+                settings.url(), settings.user(), settings.password())) {
+            store = new MySqlTeamTaskStore(settings);
+        } catch (Exception e) {
+            org.junit.jupiter.api.Assumptions.abort("MySQL test database is not available: " + e.getMessage());
+            return;
+        }
+        String rootId = "team-mysql-" + java.util.UUID.randomUUID();
+        try {
+            store.ensureTeam(rootId, true);
+            for (int i = 1; i <= 12; i++) {
+                TeamTask created = store.create(rootId, "Task " + i, "desc", List.of(), List.of("src"));
+                assertEquals("task-" + i, created.id());
+            }
+            List<TeamTask> listed = store.list(rootId);
+            assertEquals(12, listed.size());
+            assertEquals("task-1", listed.get(0).id());
+            assertEquals("task-10", listed.get(9).id());
+            assertEquals("task-12", listed.get(11).id());
+        } finally {
+            store.close();
+            try (java.sql.Connection c = java.sql.DriverManager.getConnection(
+                    settings.url(), settings.user(), settings.password());
+                 java.sql.Statement st = c.createStatement()) {
+                st.executeUpdate("DELETE FROM jade_team_tasks WHERE root_run_id='" + rootId + "'");
+                st.executeUpdate("DELETE FROM jade_teams WHERE root_run_id='" + rootId + "'");
+            } catch (Exception ignored) {
+            }
+        }
+    }
 }

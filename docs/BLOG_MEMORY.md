@@ -55,6 +55,10 @@
 | 24 | 2026-11-24 | 会话状态 | 成功任务重启后显示 `FAILED`；`jade_sessions` 仍是 `QUEUED`/`RUNNING`，但事件里已有 `run.succeeded` | CLI 在 `run.succeeded` 后立即退出并关闭 executor；最终快照原本只在 `executeTurn` finally 写入，`run.finished` 事件本身不落 session 快照 | `RunEventLog.emit("run.finished")` 在事件可见前先写终态快照；CLI 等到 `run.finished` 再退出；启动时用工作区 terminal 事件修复 stale 行；`SUCCEEDED` 清空重启错误 | 会话 1.5 |
 | 26 | 2026-11-26 | Team wait 超时误判 | `wait_agent` 超时输出只有 `Timed out.`，Lead 可能误判成员卡死并重复 spawn/reassign | 观察窗口结束 ≠ 成员失败；返回结果没有区分 running/queued/completed/failed | 返回 `timedOut`、`waitedMillis` 和四组状态；超时输出明确禁止对活跃成员重派；Team policy 同步说明；新增阻塞成员测试 | Team 8.4 |
 | 25 | 2026-11-24 | 记忆生命周期 | 长期记忆没有 TTL/时间衰减/supersede；旧偏好和新偏好可能同时召回 | 当前只做成功 run + 用户明确信号的准入，汰换只有手动删除；设计中的 expires_at/status/feedback 未实现 | 文档明确区分已实现与建议；推荐按 kind 设 TTL、last_verified、supersedes、过期先排除召回；补图 4 | Mem0 11 |
+| 27 | 2026-11-26 | 命令审批绕过 | `"ls\nsudo id"`、`"ls\ncurl ..."`、`echo x > ~/.zshrc`、`find . -exec` 在 `balanced` 下被判为 `READ` 免审批 | 正则缺少 `(?m)` 多行模式，`isReadOnly` 未按 `\n` 切分，且未拦截输出重定向与 `find` 执行标志 | 全部锚点加 `(?m)`，`isReadOnly` 按 `\r?\n` 切分并排除重定向/`tee`/`find -exec/-delete` | 安全审计 |
+| 28 | 2026-11-26 | Team 上下文串味与提示词漏挂 | `send_message` 续跑 teammate 时混入了 Lead 的历史消息；Lead 从未收到 `Team mode` 系统提示词 | `runTeamTurn` 误调单参 `loadMessages(root)` 读取根 `.agent/transcript.json`；`executeTurn` 漏调 `.withTeamPolicy(...)` | 改调双参 `loadMessages(root, run.id())` 读取子目录；根会话补挂 `.withTeamPolicy(team.teamPolicy(run))` | Team 8.5 |
+| 29 | 2026-11-26 | Mem0 跨会话失忆 | 新开会话无法召回上一会话写入的 `scope=project` 记忆 | `projectId` 对单次运行目录 `agent-workspaces/run-xxxx` 取哈希，每次新会话目录变化导致过滤失败 | 默认收敛到 `workspacesRoot` 逻辑项目路径（支持 `AGENT_MEMORY_PROJECT_ID` 覆盖），并对 `health()` 增加 15s 缓存 | Mem0 11.6 |
+| 30 | 2026-11-26 | 本地 Web CSRF / DNS Rebinding | 浏览器跨站简单请求 `text/plain` 可向 `127.0.0.1` 提交任务或批准权限 | `WebServer` 未校验 `Host`、`Origin`/`Sec-Fetch-Site` 与 `Content-Type: application/json` | loopback 强制校验 `Host` 与同源头，JSON 接口拒绝非 `application/json`，非 loopback 强制要求 `AGENT_WEB_TOKEN` | 安全审计 |
 
 ## 发布记录
 

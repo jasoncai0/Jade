@@ -50,12 +50,14 @@ MySQL 用 `docker compose up -d`；数据库 `jade`，端口 `127.0.0.1:3307`。
 - MCP 工具默认走审批；GitHub MCP 需要 PAT，当前没有在真实 GitHub 上完成写入烟测。
 - Team 默认关闭（`AGENT_TEAM_ENABLED=false`），session 级开关；任务板持久化在 MySQL，成员为 runtime-only，重启后不复活。
 - MCP 未实现 prompts / sampling / OAuth；HTTP 启动重试是有限退避，不是完整重连状态机。
-- 单用户、localhost、无鉴权；不要暴露公网。
+- 单用户、localhost 默认；非 loopback 绑定必须配置 `AGENT_WEB_TOKEN`，且写接口校验 `Host` / `Origin` / `Sec-Fetch-Site` / `Content-Type: application/json`。
 - Web UI 为 Codex 风格：左侧会话栏、中间阅读列、底部 composer；Session/Trace 双 Tab，Context 详情在右侧抽屉。Trace 默认收起在 Tab 内。
 
 ## 文档索引
 
 - `README.md`：功能、API、配置、测试。
+- `LICENSE`：标准 MIT 许可证原文。
+- `docs/CODE-REVIEW-2026-11-26.md`：全量架构、代码缺陷、安全边界审计与演进 Roadmap。
 - `docs/superpowers/specs/2026-11-23-mem0-memory-design.md`：Mem0 方案、收益评估与埋点。
 - `docs/ARCHITECTURE.md`：组件、阶段、事件、并发。
 - `docs/DEMO.md`：演示脚本。

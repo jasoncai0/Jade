@@ -24,9 +24,23 @@ public final class MemoryPolicy {
     }
 
     public static MemoryScope scope(MemorySettings settings, Path workspace, String sessionId) {
+        return scope(settings, workspace, null, sessionId);
+    }
+
+    public static MemoryScope scope(MemorySettings settings, Path workspace,
+                                    Path workspacesRoot, String sessionId) {
         Path root = workspace.toAbsolutePath().normalize();
-        String name = root.getFileName() == null ? "workspace" : root.getFileName().toString();
-        return new MemoryScope(settings.userId(), "jade", projectId(root), name, sessionId);
+        Path logicalRoot = root;
+        if (workspacesRoot != null) {
+            Path normalizedWorkspaces = workspacesRoot.toAbsolutePath().normalize();
+            if (root.startsWith(normalizedWorkspaces)) {
+                logicalRoot = normalizedWorkspaces;
+            }
+        }
+        String name = logicalRoot.getFileName() == null ? "workspace" : logicalRoot.getFileName().toString();
+        String explicitProject = settings == null ? "" : settings.projectId();
+        String resolvedProjectId = explicitProject.isBlank() ? projectId(logicalRoot) : explicitProject;
+        return new MemoryScope(settings.userId(), "jade", resolvedProjectId, name, sessionId);
     }
 
     public static String projectId(Path root) {

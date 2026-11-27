@@ -70,6 +70,30 @@ class PermissionPolicyTest {
         assertTrue(evaluation.networkAllowed());
     }
 
+    @Test
+    void classifiesReadToolOutputDelegationTeamAndMavenBuildProperly() {
+        PermissionPolicy balanced = new PermissionPolicy(PermissionMode.BALANCED);
+        PermissionPolicy readOnly = new PermissionPolicy(PermissionMode.READ_ONLY);
+        PermissionSession session = new PermissionSession();
+
+        assertEquals(PermissionEvaluation.Decision.ALLOW,
+                balanced.evaluate("read_tool_output", Map.of("path", ".agent/tool-results/a.txt"), session).decision());
+        assertEquals(PermissionEvaluation.Decision.ALLOW,
+                readOnly.evaluate("read_tool_output", Map.of("path", ".agent/tool-results/a.txt"), session).decision());
+        assertEquals(PermissionEvaluation.Decision.ALLOW,
+                balanced.evaluate("delegate_task", Map.of("task", "inspect"), session).decision());
+        assertEquals(PermissionEvaluation.Decision.ALLOW,
+                balanced.evaluate("mcp_docs_read_resource", Map.of("uri", "file:///a"), session).decision());
+        assertEquals(PermissionEvaluation.Decision.DENY,
+                readOnly.evaluate("team_spawn", Map.of("task", "write"), session).decision());
+
+        assertEquals(PermissionEvaluation.Decision.ASK,
+                balanced.evaluate("compile_code", Map.of("_buildExecutesCode", true), session).decision());
+        session.grant(request(PermissionKind.EXECUTE, ""), PermissionScope.SESSION);
+        assertEquals(PermissionEvaluation.Decision.ALLOW,
+                balanced.evaluate("compile_code", Map.of("_buildExecutesCode", true), session).decision());
+    }
+
     private static PermissionRequest request(PermissionKind kind, String target) {
         return PermissionRequest.create("run-test", "write_file", kind, "low",
                 "test request", "", target, 300_000);

@@ -51,7 +51,13 @@ public final class PermissionManager {
     }
 
     public PermissionResult authorize(String tool, Map<String, Object> args) {
-        PermissionEvaluation evaluation = policy.evaluate(tool, args == null ? Map.of() : args, session);
+        Map<String, Object> effectiveArgs = args == null ? Map.of() : args;
+        if (("compile_code".equals(tool) || "compile_java".equals(tool)) && hasExecutableBuildConfig()) {
+            Map<String, Object> enriched = new LinkedHashMap<>(effectiveArgs);
+            enriched.put("_buildExecutesCode", true);
+            effectiveArgs = enriched;
+        }
+        PermissionEvaluation evaluation = policy.evaluate(tool, effectiveArgs, session);
         if (evaluation.decision() == PermissionEvaluation.Decision.DENY) {
             audit(null, PermissionResult.deny("policy", evaluation.summary()));
             return PermissionResult.deny("policy", evaluation.summary());
@@ -96,6 +102,13 @@ public final class PermissionManager {
             throw new RunControl.RunCancelledException();
         }
         return result;
+    }
+
+    private boolean hasExecutableBuildConfig() {
+        Path root = workspace.root();
+        return Files.isRegularFile(root.resolve("pom.xml"))
+                || Files.isExecutable(root.resolve("mvnw"))
+                || Files.isRegularFile(root.resolve("mvnw.cmd"));
     }
 
     private void audit(PermissionRequest request, PermissionResult result) {

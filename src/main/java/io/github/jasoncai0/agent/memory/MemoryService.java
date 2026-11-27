@@ -27,6 +27,10 @@ public interface MemoryService extends AutoCloseable {
         // no-op
     }
 
+    default void submitAsync(Runnable task) {
+        Thread.ofVirtual().name("jade-memory-write").start(task);
+    }
+
     @Override
     default void close() {
         // no-op

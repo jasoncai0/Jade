@@ -118,11 +118,30 @@ public final class RunArtifacts {
             }
             Files.writeString(dir.resolve("transcript.json"), root.toPrettyString(), StandardCharsets.UTF_8);
 
-            StringBuilder eventLines = new StringBuilder();
-            for (AgentEvent event : events.snapshot()) {
-                eventLines.append(JSON.writeValueAsString(event)).append('\n');
+            Path eventsFile = dir.resolve("events.jsonl");
+            boolean existingEvents = Files.isRegularFile(eventsFile);
+            long alreadyPersisted = existingEvents ? events.persistedDiskSeq() : 0L;
+            List<AgentEvent> delta = existingEvents ? events.after(alreadyPersisted) : events.snapshot();
+            if (!delta.isEmpty()) {
+                StringBuilder eventLines = new StringBuilder();
+                long highest = alreadyPersisted;
+                for (AgentEvent event : delta) {
+                    eventLines.append(JSON.writeValueAsString(event)).append('\n');
+                    if (event.seq() > highest) {
+                        highest = event.seq();
+                    }
+                }
+                if (existingEvents) {
+                    Files.writeString(eventsFile, eventLines.toString(), StandardCharsets.UTF_8,
+                            java.nio.file.StandardOpenOption.CREATE,
+                            java.nio.file.StandardOpenOption.APPEND);
+                } else {
+                    Files.writeString(eventsFile, eventLines.toString(), StandardCharsets.UTF_8);
+                }
+                events.markPersistedDiskSeq(highest);
+            } else if (!existingEvents) {
+                Files.writeString(eventsFile, "", StandardCharsets.UTF_8);
             }
-            Files.writeString(dir.resolve("events.jsonl"), eventLines.toString(), StandardCharsets.UTF_8);
 
             if (snapshot.finalAnswer() != null && !snapshot.finalAnswer().isBlank()) {
                 Files.writeString(dir.resolve("final.md"), snapshot.finalAnswer(), StandardCharsets.UTF_8);
@@ -348,7 +367,7 @@ public final class RunArtifacts {
         List<String> files = snapshot.files() == null ? List.of() : snapshot.files();
         Usage usage = snapshot.usage() == null ? Usage.ZERO : snapshot.usage();
         boolean terminal = switch (status) {
-            case "SUCCEEDED", "FAILED", "CANCELLED", "MAX_STEPS" -> true;
+            case "SUCCEEDED", "FAILED", "CANCELLED", "MAX_STEPS", "LOOP_DETECTED", "BUDGET_EXCEEDED" -> true;
             default -> false;
         };
         if (!terminal) {

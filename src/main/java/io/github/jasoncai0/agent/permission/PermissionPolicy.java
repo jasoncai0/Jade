@@ -7,8 +7,10 @@ import java.util.Set;
 public final class PermissionPolicy {
     private static final Set<String> READ_TOOLS = Set.of(
             "read_file", "list_files", "search_text", "update_plan", "load_skill", "reflect", "ask_user",
-            "team_task_create", "team_task_list", "team_task_get", "team_task_update",
-            "team_spawn", "list_agents", "send_message", "wait_agent");
+            "read_tool_output", "delegate_task",
+            "team_task_list", "team_task_get", "list_agents", "wait_agent");
+    private static final Set<String> TEAM_WRITE_TOOLS = Set.of(
+            "team_task_create", "team_task_update", "team_spawn", "send_message");
     private static final CommandClassifier CLASSIFIER = new CommandClassifier();
 
     private final PermissionMode mode;
@@ -23,16 +25,36 @@ public final class PermissionPolicy {
 
     public PermissionEvaluation evaluate(String tool, Map<String, Object> args, PermissionSession session) {
         PermissionSession grants = session == null ? new PermissionSession() : session;
-        if (READ_TOOLS.contains(tool)) {
+        Map<String, Object> safeArgs = args == null ? Map.of() : args;
+        if (READ_TOOLS.contains(tool) || isMcpResourceReadTool(tool)) {
             return PermissionEvaluation.allow(tool + " is read-only");
         }
+        if (TEAM_WRITE_TOOLS.contains(tool)) {
+            if (mode == PermissionMode.READ_ONLY) {
+                return PermissionEvaluation.deny("read-only mode blocks " + tool);
+            }
+            if (mode == PermissionMode.STRICT) {
+                return PermissionEvaluation.ask(PermissionKind.COMMAND, "medium",
+                        "Team coordination action", tool, "", false, null, false);
+            }
+            return PermissionEvaluation.allow(tool + " allowed for team coordination");
+        }
         return switch (tool) {
-            case "write_file", "edit_file" -> evaluateFile(tool, args, grants);
-            case "compile_code", "compile_java" -> evaluateCompile(tool);
-            case "run_code", "run_java" -> evaluateExecute(tool, args, grants);
-            case "run_command" -> evaluateCommand(args, grants);
+            case "write_file", "edit_file" -> evaluateFile(tool, safeArgs, grants);
+            case "compile_code", "compile_java" -> evaluateCompile(tool, safeArgs, grants);
+            case "run_code", "run_java" -> evaluateExecute(tool, safeArgs, grants);
+            case "run_command" -> evaluateCommand(safeArgs, grants);
             default -> evaluateUnknown(tool);
         };
+    }
+
+    private static boolean isMcpResourceReadTool(String tool) {
+        if (tool == null || !tool.startsWith("mcp_")) {
+            return false;
+        }
+        return tool.endsWith("_list_resources")
+                || tool.endsWith("_list_resource_templates")
+                || tool.endsWith("_read_resource");
     }
 
     private PermissionEvaluation evaluateFile(String tool, Map<String, Object> args, PermissionSession grants) {
@@ -61,9 +83,17 @@ public final class PermissionPolicy {
         };
     }
 
-    private PermissionEvaluation evaluateCompile(String tool) {
+    private PermissionEvaluation evaluateCompile(String tool, Map<String, Object> args, PermissionSession grants) {
         if (mode == PermissionMode.READ_ONLY) {
             return PermissionEvaluation.deny("read-only mode blocks compilation");
+        }
+        if (mode == PermissionMode.BYPASS) {
+            return PermissionEvaluation.allow("permission checks bypassed");
+        }
+        boolean buildExecutesCode = Boolean.TRUE.equals(args.get("_buildExecutesCode"));
+        if (buildExecutesCode && !grants.codeExecution()) {
+            return PermissionEvaluation.ask(PermissionKind.EXECUTE, "high",
+                    "Run Maven build (executes pom.xml plugins or mvnw)", tool, "", false, null, false);
         }
         if (mode == PermissionMode.STRICT) {
             return PermissionEvaluation.ask(PermissionKind.EXECUTE, "low",
@@ -151,6 +181,9 @@ public final class PermissionPolicy {
                 || path.equals(".git") || path.startsWith(".git/")
                 || path.equals(".ssh") || path.startsWith(".ssh/")
                 || path.equals("agents.md") || path.endsWith("/agents.md")
+                || path.equals("mvnw") || path.endsWith("/mvnw")
+                || path.equals("mvnw.cmd") || path.endsWith("/mvnw.cmd")
+                || path.equals("gradlew") || path.endsWith("/gradlew")
                 || path.endsWith(".pem") || path.endsWith(".key")
                 || path.contains("id_rsa") || path.contains("id_ed25519");
     }

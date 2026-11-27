@@ -310,6 +310,72 @@ class WebServerTest {
         }
     }
 
+    @Test
+    void enforcesCsrfContentTypeAndRemoteTokenGuards() throws Exception {
+        Path root = temp.resolve("security-app");
+        Path skills = Files.createDirectories(root.resolve("skills"));
+        AppConfig config = new AppConfig(
+                root, skills, root.resolve("runs"),
+                new LlmSettings("sk-test", "http://127.0.0.1:1", "fake", 5, 1024),
+                new AgentSettings(3, 3, 20_000, 30, false, PermissionMode.BYPASS),
+                new ServerSettings("127.0.0.1", 0)
+        );
+        AgentService service = new AgentService(config, new ScriptedLlm());
+        WebServer server = new WebServer(service, config.server());
+        try {
+            server.start();
+            String base = server.url();
+
+            HttpResponse<String> crossOrigin = http.send(HttpRequest.newBuilder(URI.create(base + "/api/runs"))
+                            .header("Content-Type", "application/json")
+                            .header("Origin", "https://evil.example")
+                            .POST(HttpRequest.BodyPublishers.ofString("{\"task\":\"csrf\"}"))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(403, crossOrigin.statusCode());
+
+            HttpResponse<String> crossSiteFetch = http.send(HttpRequest.newBuilder(URI.create(base + "/api/runs"))
+                            .header("Content-Type", "application/json")
+                            .header("Sec-Fetch-Site", "cross-site")
+                            .POST(HttpRequest.BodyPublishers.ofString("{\"task\":\"csrf\"}"))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(403, crossSiteFetch.statusCode());
+
+            HttpResponse<String> plainText = http.send(HttpRequest.newBuilder(URI.create(base + "/api/runs"))
+                            .header("Content-Type", "text/plain")
+                            .POST(HttpRequest.BodyPublishers.ofString("{\"task\":\"simple-cors\"}"))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(415, plainText.statusCode());
+        } finally {
+            server.close();
+            service.close();
+        }
+
+        AgentService remoteService = new AgentService(config, new ScriptedLlm());
+        try {
+            WebServer unauthenticatedRemote = new WebServer(remoteService, new ServerSettings("0.0.0.0", 0));
+            org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, unauthenticatedRemote::start);
+
+            WebServer tokenServer = new WebServer(remoteService, new ServerSettings("127.0.0.1", 0, "top-secret"));
+            try {
+                tokenServer.start();
+                HttpResponse<String> noToken = get(tokenServer.url() + "/api/health");
+                assertEquals(401, noToken.statusCode());
+                HttpResponse<String> withToken = http.send(HttpRequest.newBuilder(URI.create(tokenServer.url() + "/api/health"))
+                                .header("Authorization", "Bearer top-secret")
+                                .GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(200, withToken.statusCode());
+            } finally {
+                tokenServer.close();
+            }
+        } finally {
+            remoteService.close();
+        }
+    }
+
     private HttpResponse<String> get(String url) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(10))

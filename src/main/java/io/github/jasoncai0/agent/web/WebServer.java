@@ -68,6 +68,11 @@ public final class WebServer implements AutoCloseable {
     }
 
     public void start() throws IOException {
+        if (!settings.isLoopback() && !settings.hasAuthToken()) {
+            throw new IllegalStateException(
+                    "Refusing to bind non-loopback host '" + settings.host()
+                            + "' without AGENT_WEB_TOKEN configured");
+        }
         server = HttpServer.create(new InetSocketAddress(settings.host(), settings.port()), 0);
         executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
@@ -76,8 +81,8 @@ public final class WebServer implements AutoCloseable {
         server.start();
         boundPort = server.getAddress().getPort();
         String host = settings.host();
-        if (!host.equals("127.0.0.1") && !host.equals("localhost") && !host.equals("::1")) {
-            Log.warn("web.non_loopback", Map.of("host", host));
+        if (!settings.isLoopback()) {
+            Log.warn("web.non_loopback", Map.of("host", host, "tokenProtected", true));
         }
         Log.info("web.started", Map.of("url", url(), "boundPort", boundPort));
     }
@@ -100,7 +105,12 @@ public final class WebServer implements AutoCloseable {
             String path = exchange.getRequestURI().getPath();
             String method = exchange.getRequestMethod().toUpperCase(Locale.ROOT);
             Log.info("web.request", Map.of("method", method, "path", path));
+            if (!checkRequestGuards(exchange, method)) {
+                return;
+            }
             route(exchange, method, path);
+        } catch (UnsupportedMediaTypeException e) {
+            sendError(exchange, 415, e.getMessage());
         } catch (NoSuchElementException e) {
             sendError(exchange, 404, e.getMessage() == null ? "Not found" : e.getMessage());
         } catch (IllegalArgumentException | WorkspaceException e) {
@@ -596,6 +606,10 @@ public final class WebServer implements AutoCloseable {
     }
 
     private void handleStatic(HttpExchange exchange) throws IOException {
+        if (!isAllowedHostHeader(exchange)) {
+            sendText(exchange, 403, "text/plain; charset=utf-8", "Forbidden Host header");
+            return;
+        }
         String method = exchange.getRequestMethod();
         if (!method.equals("GET") && !method.equals("HEAD")) {
             exchange.sendResponseHeaders(405, -1);
@@ -700,7 +714,101 @@ public final class WebServer implements AutoCloseable {
             if (bytes.length == 0) {
                 return null;
             }
+            String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+            if (contentType == null || !contentType.trim().toLowerCase(Locale.ROOT).startsWith("application/json")) {
+                throw new UnsupportedMediaTypeException("Content-Type must be application/json");
+            }
             return mapper.readTree(bytes);
+        }
+    }
+
+    private boolean checkRequestGuards(HttpExchange exchange, String method) throws IOException {
+        if (!isAllowedHostHeader(exchange)) {
+            sendError(exchange, 403, "Forbidden Host header");
+            return false;
+        }
+        if (settings.hasAuthToken() && !hasValidBearerToken(exchange)) {
+            exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer");
+            sendError(exchange, 401, "Missing or invalid bearer token");
+            return false;
+        }
+        if (!method.equals("GET") && !method.equals("HEAD")) {
+            String secFetchSite = exchange.getRequestHeaders().getFirst("Sec-Fetch-Site");
+            if (secFetchSite != null && secFetchSite.trim().equalsIgnoreCase("cross-site")) {
+                sendError(exchange, 403, "Cross-site request blocked");
+                return false;
+            }
+            String origin = exchange.getRequestHeaders().getFirst("Origin");
+            if (origin != null && !origin.isBlank() && !isAllowedOrigin(origin, exchange)) {
+                sendError(exchange, 403, "Cross-origin request blocked");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isAllowedHostHeader(HttpExchange exchange) {
+        if (!settings.isLoopback()) {
+            return true;
+        }
+        String rawHost = exchange.getRequestHeaders().getFirst("Host");
+        if (rawHost == null || rawHost.isBlank()) {
+            return true;
+        }
+        return ServerSettings.isLoopbackHost(extractHostName(rawHost));
+    }
+
+    private boolean isAllowedOrigin(String rawOrigin, HttpExchange exchange) {
+        String trimmed = rawOrigin.trim();
+        if (trimmed.equalsIgnoreCase("null")) {
+            return false;
+        }
+        try {
+            URI parsed = URI.create(trimmed);
+            String originHost = parsed.getHost();
+            if (originHost == null || originHost.isBlank()) {
+                return false;
+            }
+            if (settings.isLoopback()) {
+                return ServerSettings.isLoopbackHost(originHost);
+            }
+            String requestHost = extractHostName(exchange.getRequestHeaders().getFirst("Host"));
+            return !requestHost.isBlank() && originHost.equalsIgnoreCase(requestHost);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    private static String extractHostName(String hostHeader) {
+        if (hostHeader == null || hostHeader.isBlank()) {
+            return "";
+        }
+        String value = hostHeader.trim();
+        if (value.startsWith("[")) {
+            int close = value.indexOf(']');
+            return close > 0 ? value.substring(0, close + 1) : value;
+        }
+        int colon = value.indexOf(':');
+        return colon >= 0 ? value.substring(0, colon) : value;
+    }
+
+    private boolean hasValidBearerToken(HttpExchange exchange) {
+        String auth = exchange.getRequestHeaders().getFirst("Authorization");
+        if (auth == null) {
+            return false;
+        }
+        String trimmed = auth.trim();
+        if (trimmed.length() <= 7 || !trimmed.regionMatches(true, 0, "Bearer ", 0, 7)) {
+            return false;
+        }
+        byte[] provided = trimmed.substring(7).trim().getBytes(StandardCharsets.UTF_8);
+        byte[] expected = settings.authToken().getBytes(StandardCharsets.UTF_8);
+        return java.security.MessageDigest.isEqual(provided, expected);
+    }
+
+    private static final class UnsupportedMediaTypeException extends RuntimeException {
+        private UnsupportedMediaTypeException(String message) {
+            super(message);
         }
     }
 

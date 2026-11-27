@@ -19,6 +19,8 @@ public final class MySqlTeamTaskStore implements TeamTaskStore {
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {
     };
 
+    private static final int MAX_LIST_ROWS = 512;
+
     private final SqlSessionFactory factory;
     private final PooledDataSource dataSource;
 
@@ -28,6 +30,11 @@ public final class MySqlTeamTaskStore implements TeamTaskStore {
         }
         this.dataSource = new PooledDataSource("com.mysql.cj.jdbc.Driver",
                 settings.url(), settings.user(), settings.password());
+        this.dataSource.setPoolMaximumActiveConnections(8);
+        this.dataSource.setPoolMaximumIdleConnections(4);
+        this.dataSource.setPoolPingEnabled(true);
+        this.dataSource.setPoolPingQuery("SELECT 1");
+        this.dataSource.setPoolPingConnectionsNotUsedFor(30_000);
         Configuration configuration = new Configuration(new Environment(
                 "team", new JdbcTransactionFactory(), dataSource));
         configuration.setMapUnderscoreToCamelCase(true);
@@ -37,6 +44,9 @@ public final class MySqlTeamTaskStore implements TeamTaskStore {
             TeamMapper mapper = session.getMapper(TeamMapper.class);
             mapper.createTeams();
             mapper.createTasks();
+        } catch (RuntimeException e) {
+            dataSource.forceCloseAll();
+            throw e;
         }
     }
 
@@ -66,18 +76,19 @@ public final class MySqlTeamTaskStore implements TeamTaskStore {
     public synchronized TeamTask create(String rootRunId, String subject, String description,
                                         List<String> blockedBy, List<String> writeScopes) {
         long now = System.currentTimeMillis();
-        try (SqlSession session = factory.openSession(true)) {
+        try (SqlSession session = factory.openSession(false)) {
             TeamMapper mapper = session.getMapper(TeamMapper.class);
             if (mapper.bumpNextTask(rootRunId, now) == 0) {
                 throw new IllegalArgumentException("unknown team root: " + rootRunId);
             }
-            Long no = mapper.currentTaskNo(rootRunId);
-            if (no == null) {
+            Long no = mapper.allocatedTaskNo();
+            if (no == null || no <= 0) {
                 throw new IllegalStateException("could not allocate team task id");
             }
             TeamTask task = new TeamTask("task-" + no, 1, subject, description,
                     TeamTaskStatus.PENDING, null, null, blockedBy, writeScopes, now, now);
             mapper.insertTask(toRow(rootRunId, task));
+            session.commit();
             return task;
         }
     }
@@ -93,9 +104,23 @@ public final class MySqlTeamTaskStore implements TeamTaskStore {
     @Override
     public synchronized List<TeamTask> list(String rootRunId) {
         try (SqlSession session = factory.openSession(true)) {
-            return session.getMapper(TeamMapper.class).listTasks(rootRunId).stream()
-                    .map(MySqlTeamTaskStore::fromRow).toList();
+            return session.getMapper(TeamMapper.class).listTasks(rootRunId, MAX_LIST_ROWS).stream()
+                    .map(MySqlTeamTaskStore::fromRow)
+                    .sorted(java.util.Comparator.comparingLong(MySqlTeamTaskStore::taskOrderKey))
+                    .toList();
         }
+    }
+
+    private static long taskOrderKey(TeamTask task) {
+        String id = task.id();
+        if (id != null && id.startsWith("task-")) {
+            try {
+                return Long.parseLong(id.substring(5));
+            } catch (NumberFormatException ignored) {
+                // fall back to createdAt
+            }
+        }
+        return task.createdAt();
     }
 
     @Override

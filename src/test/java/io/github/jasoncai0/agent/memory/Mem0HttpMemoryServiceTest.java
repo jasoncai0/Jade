@@ -26,6 +26,7 @@ class Mem0HttpMemoryServiceTest {
     private final AtomicReference<JsonNode> addBody = new AtomicReference<>();
     private final AtomicReference<String> apiKey = new AtomicReference<>();
     private final AtomicReference<JsonNode> searchBody = new AtomicReference<>();
+    private final java.util.concurrent.atomic.AtomicInteger getCount = new java.util.concurrent.atomic.AtomicInteger();
 
     @BeforeEach
     void start() throws IOException {
@@ -46,6 +47,8 @@ class Mem0HttpMemoryServiceTest {
         Mem0HttpMemoryService memory = new Mem0HttpMemoryService(settings);
         MemoryScope scope = new MemoryScope("u1", "jade", "project-a", "demo", "run-1");
         assertTrue(memory.health().available());
+        assertTrue(memory.health().available());
+        assertEquals(1, getCount.get(), "health() should use short TTL cache instead of hitting GET every call");
 
         List<MemoryItem> items = memory.recall("what indentation", scope, 5);
         assertEquals(1, items.size());
@@ -70,6 +73,7 @@ class Mem0HttpMemoryServiceTest {
 
     private void handle(HttpExchange exchange) throws IOException {
         if (exchange.getRequestMethod().equals("GET")) {
+            getCount.incrementAndGet();
             respond(exchange, "{\"results\":[{\"id\":\"mem-1\",\"memory\":\"Use 4 spaces.\","
                     + "\"score\":0.9,\"metadata\":{\"kind\":\"preference\",\"scope\":\"project\","
                     + "\"project_id\":\"project-a\"}}]}");

@@ -13,31 +13,33 @@ public final class CommandClassifier {
     private static final int MAX_SUMMARY = 500;
     private static final Pattern URL = Pattern.compile("https?://([^\\s'\"`]+)", Pattern.CASE_INSENSITIVE);
     private static final List<Pattern> HARD_DENY = List.of(
-            Pattern.compile("(?i)(^|[;&|]\\s*)(sudo|su|doas)(\\s|$)"),
-            Pattern.compile("(?i)\\brm\\s+-[a-z]*r[a-z]*f[a-z]*\\s+(/|~|\\.)(\\s|$)"),
-            Pattern.compile("(?i)(^|[;&|]\\s*)(mkfs|fdisk|parted)(\\s|$)"),
-            Pattern.compile("(?i)\\bdd\\s+if=.*\\bof=/dev/"),
-            Pattern.compile("(?i)(^|[;&|]\\s*)(shutdown|reboot|halt|poweroff)(\\s|$)"),
+            Pattern.compile("(?im)(^|[;&|]\\s*)(sudo|su|doas)(\\s|$)"),
+            Pattern.compile("(?im)\\brm\\s+-[a-z]*r[a-z]*f[a-z]*\\s+(/|~|\\.)(\\s|$)"),
+            Pattern.compile("(?im)(^|[;&|]\\s*)(mkfs|fdisk|parted)(\\s|$)"),
+            Pattern.compile("(?im)\\bdd\\s+if=.*\\bof=/dev/"),
+            Pattern.compile("(?im)(^|[;&|]\\s*)(shutdown|reboot|halt|poweroff)(\\s|$)"),
             Pattern.compile(":\\s*\\(\\s*\\)\\s*\\{"),
-            Pattern.compile("(?i)(^|[;&|]\\s*)(tee|>)\\s*/(etc|System|Library)/"),
-            Pattern.compile("(?i)(^|[;&|]\\s*)(rm|chmod|chown|cp|mv)\\s+[^\\n]*(~/\\.ssh|/etc/|/System/|/Library/)")
+            Pattern.compile("(?im)(^|[;&|]\\s*)(tee|>>?)\\s*/(etc|System|Library)/"),
+            Pattern.compile("(?im)(^|[;&|]\\s*)(rm|chmod|chown|cp|mv)\\s+[^\\n]*(~/\\.ssh|/etc/|/System/|/Library/)")
     );
     private static final List<Pattern> DANGEROUS = List.of(
-            Pattern.compile("(?i)\\brm\\s+-[a-z]*r[a-z]*f[a-z]*\\b"),
-            Pattern.compile("(?i)\\bgit\\s+(reset\\s+--hard|clean\\s+-[a-z]*f[a-z]*|push\\s+--force)"),
-            Pattern.compile("(?i)\\b(chmod|chown|kill|pkill|launchctl|crontab)\\b"),
-            Pattern.compile("(?i)\\bdocker\\b"),
-            Pattern.compile("(?i)(curl|wget)[^\\n]*\\|\\s*(bash|sh|zsh)"),
-            Pattern.compile("(?i)(^|[;&|]\\s*)(bash|sh|zsh)\\s+-c\\b"),
-            Pattern.compile("(?i)\\beval\\b|\\$\\(|`"),
-            Pattern.compile("(?i)\\b(python|python3|node|perl)\\s+-[ce]\\b")
+            Pattern.compile("(?im)\\brm\\s+-[a-z]*r[a-z]*f[a-z]*\\b"),
+            Pattern.compile("(?im)\\bgit\\s+(reset\\s+--hard|clean\\s+-[a-z]*f[a-z]*|push\\s+--force)"),
+            Pattern.compile("(?im)\\b(chmod|chown|kill|pkill|launchctl|crontab)\\b"),
+            Pattern.compile("(?im)\\bdocker\\b"),
+            Pattern.compile("(?im)(curl|wget)[^\\n]*\\|\\s*(bash|sh|zsh)"),
+            Pattern.compile("(?im)(^|[;&|]\\s*|-exec\\s+)(bash|sh|zsh)\\s+-c\\b"),
+            Pattern.compile("(?im)\\beval\\b|\\$\\(|`"),
+            Pattern.compile("(?im)\\b(python|python3|node|perl)\\s+-[ce]\\b"),
+            Pattern.compile("(?im)\\bfind\\b[^\\n]*\\s-(exec|execdir|ok|okdir)\\b"),
+            Pattern.compile("(?im)(?:\\d*>>?|&>|\\|\\s*tee\\s+-?a?\\s*)\\s*(/|~|\\$HOME\\b)")
     );
     private static final List<Pattern> NETWORK = List.of(
-            Pattern.compile("(?i)(^|[;&|]\\s*)(curl|wget)\\b"),
-            Pattern.compile("(?i)\\bgit\\s+(clone|fetch|pull|push|ls-remote)\\b"),
-            Pattern.compile("(?i)(^|[;&|]\\s*)(npm|pnpm|yarn|pip|pip3)\\b"),
-            Pattern.compile("(?i)\\bgo\\s+(get|install|mod\\s+download)\\b"),
-            Pattern.compile("(?i)(^|[;&|]\\s*)(ssh|scp|nc|ncat)\\b")
+            Pattern.compile("(?im)(^|[;&|]\\s*)(curl|wget)\\b"),
+            Pattern.compile("(?im)\\bgit\\s+(clone|fetch|pull|push|ls-remote)\\b"),
+            Pattern.compile("(?im)(^|[;&|]\\s*)(npm|pnpm|yarn|pip|pip3)\\b"),
+            Pattern.compile("(?im)\\bgo\\s+(get|install|mod\\s+download)\\b"),
+            Pattern.compile("(?im)(^|[;&|]\\s*)(ssh|scp|nc|ncat)\\b")
     );
     private static final List<Pattern> READ = List.of(
             Pattern.compile("(?i)^\\s*(ls|pwd|cat|head|tail|wc|grep|rg|find|file|stat|du|df)\\b"),
@@ -45,9 +47,12 @@ public final class CommandClassifier {
             Pattern.compile("(?i)^\\s*(java|javac|mvn|gradle|node|npm|python3?|go|gofmt)\\s+(--?version|-version|version)\\b"),
             Pattern.compile("(?i)^\\s*(echo|printf|true|false|test)\\b")
     );
+    private static final Pattern REDIRECT_OR_FIND_WRITE = Pattern.compile(
+            "(?im)(?:\\d*>>?|&>|<|\\|\\s*tee\\b|\\bfind\\b[^\\n]*\\s-(?:delete|fprint0?|fls)\\b)");
     private static final List<Pattern> WORKSPACE_WRITE = List.of(
-            Pattern.compile("(?i)^\\s*(mkdir|touch|cp|mv|rm|ln)\\b"),
-            Pattern.compile("(?i)^\\s*(mvn|gradle|gradlew|npm|pnpm|yarn|pytest|go|javac|python3?)\\b")
+            Pattern.compile("(?im)^\\s*(mkdir|touch|cp|mv|rm|ln)\\b"),
+            Pattern.compile("(?im)^\\s*(mvn|gradle|gradlew|npm|pnpm|yarn|pytest|go|javac|python3?)\\b"),
+            REDIRECT_OR_FIND_WRITE
     );
 
     public CommandClassification classify(String command) {
@@ -94,7 +99,10 @@ public final class CommandClassifier {
     }
 
     private static boolean isReadOnly(String raw) {
-        for (String segment : raw.split("&&|\\|\\||;|\\|")) {
+        if (REDIRECT_OR_FIND_WRITE.matcher(raw).find()) {
+            return false;
+        }
+        for (String segment : raw.split("&&|\\|\\||;|\\||\\r?\\n")) {
             String part = segment.strip();
             if (part.isEmpty()) {
                 continue;

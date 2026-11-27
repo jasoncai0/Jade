@@ -2,6 +2,7 @@ package io.github.jasoncai0.agent.memory;
 
 import io.github.jasoncai0.agent.config.Log;
 
+import java.nio.file.Path;
 import java.util.Map;
 
 /** Creates the configured memory backend, falling back to Noop when unavailable. */
@@ -10,6 +11,10 @@ public final class MemoryServices {
     }
 
     public static MemoryService create(MemorySettings settings) {
+        return create(settings, null);
+    }
+
+    public static MemoryService create(MemorySettings settings, Path workspacesRoot) {
         if (settings == null) {
             return NoopMemoryService.off();
         }
@@ -19,14 +24,13 @@ public final class MemoryServices {
                     MemoryHealth.disabled(safe.mode().id(),
                             safe.mode() == MemoryMode.OFF ? "memory mode off" : "memory URL is empty"));
         }
-        Mem0HttpMemoryService client = new Mem0HttpMemoryService(safe);
+        Mem0HttpMemoryService client = new Mem0HttpMemoryService(safe, workspacesRoot);
         MemoryHealth health = client.health();
-        client.close();
         if (health.available()) {
-            Mem0HttpMemoryService active = new Mem0HttpMemoryService(safe);
             Log.info("memory.ready", Map.of("provider", safe.provider(), "endpoint", safe.baseUrl()));
-            return active;
+            return client;
         }
+        client.close();
         Log.warn("memory.unavailable", Map.of("endpoint", safe.baseUrl(), "reason", health.message()));
         return new NoopMemoryService(safe.mode(),
                 new MemoryHealth(false, health.provider(), safe.mode().id(),

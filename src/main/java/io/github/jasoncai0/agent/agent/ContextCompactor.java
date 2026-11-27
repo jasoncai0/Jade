@@ -102,10 +102,13 @@ public final class ContextCompactor {
             if (summarized) {
                 compacted.add(ChatMessage.system("[Context summary of earlier conversation]\n" + summary));
             } else {
-                compacted.add(ChatMessage.system(
-                        "[Context compacted: " + removed.size()
-                                + " earlier messages were removed to stay inside the context budget. "
-                                + "The full event stream is in .agent/events.jsonl and MySQL history.]"));
+                String priorSummary = extractPriorSummary(removed);
+                String fallback = "[Context compacted: " + removed.size()
+                        + " earlier messages were removed to stay inside the context budget. "
+                        + "The full event stream is in .agent/events.jsonl and MySQL history.]";
+                compacted.add(ChatMessage.system(priorSummary.isEmpty()
+                        ? fallback
+                        : "[Context summary of earlier conversation]\n" + priorSummary + "\n\n" + fallback));
             }
         }
         compacted.addAll(kept);
@@ -188,10 +191,13 @@ public final class ContextCompactor {
             if (summarized) {
                 compacted.add(ChatMessage.system("[Context summary of earlier conversation]\n" + summary));
             } else {
-                compacted.add(ChatMessage.system(
-                        "[Context compacted after the model rejected the request: " + removed.size()
-                                + " earlier messages were removed. The full event stream is in "
-                                + ".agent/events.jsonl and MySQL history.]"));
+                String priorSummary = extractPriorSummary(removed);
+                String fallback = "[Context compacted after the model rejected the request: " + removed.size()
+                        + " earlier messages were removed. The full event stream is in "
+                        + ".agent/events.jsonl and MySQL history.]";
+                compacted.add(ChatMessage.system(priorSummary.isEmpty()
+                        ? fallback
+                        : "[Context summary of earlier conversation]\n" + priorSummary + "\n\n" + fallback));
             }
         }
         compacted.addAll(kept);
@@ -246,6 +252,17 @@ public final class ContextCompactor {
 
     public int tokens(List<ChatMessage> messages) {
         return TokenEstimator.estimate(messages);
+    }
+
+    private static String extractPriorSummary(List<ChatMessage> removed) {
+        String prefix = "[Context summary of earlier conversation]\n";
+        for (ChatMessage message : removed) {
+            if (message.role() == Role.SYSTEM && message.content() != null
+                    && message.content().startsWith(prefix)) {
+                return message.content().substring(prefix.length()).strip();
+            }
+        }
+        return "";
     }
 
     private static boolean over(int chars, int tokens, int charBudget, int tokenBudget) {

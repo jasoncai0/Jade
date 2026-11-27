@@ -16,6 +16,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Minimal Mem0 OSS REST client. Failures are isolated from the agent loop. */
@@ -23,17 +26,28 @@ public final class Mem0HttpMemoryService implements MemoryService {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final int FAILURE_THRESHOLD = 3;
     private static final long CIRCUIT_OPEN_MS = 30_000;
+    private static final long HEALTH_TTL_OK_MS = 15_000;
+    private static final long HEALTH_TTL_FAIL_MS = 2_000;
 
     private final MemorySettings settings;
+    private final Path workspacesRoot;
     private final HttpClient client;
+    private final ExecutorService asyncWrites = Executors.newVirtualThreadPerTaskExecutor();
     private final AtomicInteger failures = new AtomicInteger();
     private volatile long circuitOpenUntil;
     private volatile MemoryHealth health;
+    private volatile long healthCheckedAt;
 
     public Mem0HttpMemoryService(MemorySettings settings) {
+        this(settings, null);
+    }
+
+    public Mem0HttpMemoryService(MemorySettings settings, Path workspacesRoot) {
         this.settings = settings;
+        this.workspacesRoot = workspacesRoot;
         this.client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(Math.min(settings.recallTimeoutMs(), 1_000)))
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
         this.health = new MemoryHealth(false, settings.provider(), settings.mode().id(),
                 settings.baseUrl(), "not checked", 0);
@@ -46,9 +60,18 @@ public final class Mem0HttpMemoryService implements MemoryService {
 
     @Override
     public MemoryHealth health() {
-        if (circuitOpenUntil > System.currentTimeMillis()) {
+        long now = System.currentTimeMillis();
+        if (circuitOpenUntil > now) {
             return new MemoryHealth(false, settings.provider(), settings.mode().id(),
                     settings.baseUrl(), "circuit open after repeated failures", 0);
+        }
+        MemoryHealth cached = health;
+        long checkedAt = healthCheckedAt;
+        if (checkedAt > 0) {
+            long ttl = cached.available() ? HEALTH_TTL_OK_MS : HEALTH_TTL_FAIL_MS;
+            if (now - checkedAt < ttl) {
+                return cached;
+            }
         }
         long start = System.nanoTime();
         try {
@@ -62,12 +85,29 @@ public final class Mem0HttpMemoryService implements MemoryService {
             health = new MemoryHealth(false, settings.provider(), settings.mode().id(),
                     settings.baseUrl(), safeMessage(e), elapsedMs(start));
         }
+        healthCheckedAt = System.currentTimeMillis();
         return health;
     }
 
     @Override
     public MemoryScope scope(Path workspace, String sessionId) {
-        return MemoryPolicy.scope(settings, workspace, sessionId);
+        return MemoryPolicy.scope(settings, workspace, workspacesRoot, sessionId);
+    }
+
+    @Override
+    public void submitAsync(Runnable task) {
+        asyncWrites.submit(task);
+    }
+
+    @Override
+    public void close() {
+        asyncWrites.shutdown();
+        try {
+            asyncWrites.awaitTermination(3, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            asyncWrites.shutdownNow();
+        }
     }
 
     @Override

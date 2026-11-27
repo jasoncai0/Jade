@@ -70,14 +70,19 @@ public final class SearchTextTool implements Tool {
             filesScanned++;
             String[] lines = content.split("\n", -1);
             for (int i = 0; i < lines.length && matches < maxResults; i++) {
-                Matcher matcher = pattern.matcher(lines[i]);
-                if (matcher.find()) {
-                    matches++;
-                    String text = lines[i].strip();
-                    if (text.length() > 240) {
-                        text = text.substring(0, 240) + "…";
+                context.control().checkCancelled();
+                Matcher matcher = pattern.matcher(new BoundedCharSequence(lines[i], 200_000));
+                try {
+                    if (matcher.find()) {
+                        matches++;
+                        String text = lines[i].strip();
+                        if (text.length() > 240) {
+                            text = text.substring(0, 240) + "…";
+                        }
+                        out.append(entry.path()).append(':').append(i + 1).append(": ").append(text).append('\n');
                     }
-                    out.append(entry.path()).append(':').append(i + 1).append(": ").append(text).append('\n');
+                } catch (RegexBudgetExceededException e) {
+                    return ToolResult.error("Regex search exceeded backtracking budget; simplify the pattern or set regex=false.");
                 }
             }
         }
@@ -93,5 +98,45 @@ public final class SearchTextTool implements Tool {
     @Override
     public boolean concurrencySafe() {
         return true;
+    }
+
+    private static final class RegexBudgetExceededException extends RuntimeException {
+    }
+
+    private static final class BoundedCharSequence implements CharSequence {
+        private final String delegate;
+        private final int maxOps;
+        private int ops;
+
+        private BoundedCharSequence(String delegate, int maxOps) {
+            this.delegate = delegate;
+            this.maxOps = maxOps;
+        }
+
+        @Override
+        public int length() {
+            return delegate.length();
+        }
+
+        @Override
+        public char charAt(int index) {
+            if ((++ops & 0x3FF) == 0 && Thread.currentThread().isInterrupted()) {
+                throw new io.github.jasoncai0.agent.agent.RunControl.RunCancelledException();
+            }
+            if (ops > maxOps) {
+                throw new RegexBudgetExceededException();
+            }
+            return delegate.charAt(index);
+        }
+
+        @Override
+        public CharSequence subSequence(int start, int end) {
+            return new BoundedCharSequence(delegate.substring(start, end), Math.max(1, maxOps - ops));
+        }
+
+        @Override
+        public String toString() {
+            return delegate;
+        }
     }
 }

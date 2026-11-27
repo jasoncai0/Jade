@@ -7,6 +7,9 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 public interface TeamMapper {
+    String TASK_COLUMNS = "root_run_id, task_id, revision, subject, description, status, "
+            + "owner_id, owner_name, blocked_by_json, write_scopes_json, created_at, updated_at";
+
     @Update("CREATE TABLE IF NOT EXISTS jade_teams ("
             + "root_run_id VARCHAR(80) PRIMARY KEY,"
             + "enabled TINYINT(1) NOT NULL DEFAULT 0,"
@@ -44,23 +47,24 @@ public interface TeamMapper {
     @Update("UPDATE jade_teams SET enabled = #{enabled}, updated_at = #{now} WHERE root_run_id = #{rootRunId}")
     int setEnabled(@Param("rootRunId") String rootRunId, @Param("enabled") boolean enabled, @Param("now") long now);
 
-    @Update("UPDATE jade_teams SET next_task_no = next_task_no + 1, updated_at = #{now} WHERE root_run_id = #{rootRunId}")
+    @Update("UPDATE jade_teams SET next_task_no = LAST_INSERT_ID(next_task_no + 1), updated_at = #{now} "
+            + "WHERE root_run_id = #{rootRunId}")
     int bumpNextTask(@Param("rootRunId") String rootRunId, @Param("now") long now);
 
-    @Select("SELECT next_task_no - 1 FROM jade_teams WHERE root_run_id = #{rootRunId}")
-    Long currentTaskNo(@Param("rootRunId") String rootRunId);
+    @Select("SELECT LAST_INSERT_ID() - 1")
+    Long allocatedTaskNo();
 
-    @Insert("INSERT INTO jade_team_tasks(root_run_id, task_id, revision, subject, description, status, "
-            + "owner_id, owner_name, blocked_by_json, write_scopes_json, created_at, updated_at) "
+    @Insert("INSERT INTO jade_team_tasks(" + TASK_COLUMNS + ") "
             + "VALUES(#{rootRunId}, #{taskId}, #{revision}, #{subject}, #{description}, #{status}, "
             + "#{ownerId}, #{ownerName}, #{blockedByJson}, #{writeScopesJson}, #{createdAt}, #{updatedAt})")
     int insertTask(TeamTaskRow row);
 
-    @Select("SELECT * FROM jade_team_tasks WHERE root_run_id = #{rootRunId} AND task_id = #{taskId}")
+    @Select("SELECT " + TASK_COLUMNS + " FROM jade_team_tasks WHERE root_run_id = #{rootRunId} AND task_id = #{taskId}")
     TeamTaskRow findTask(@Param("rootRunId") String rootRunId, @Param("taskId") String taskId);
 
-    @Select("SELECT * FROM jade_team_tasks WHERE root_run_id = #{rootRunId} ORDER BY CAST(SUBSTRING(task_id, 6) AS UNSIGNED)")
-    List<TeamTaskRow> listTasks(@Param("rootRunId") String rootRunId);
+    @Select("SELECT " + TASK_COLUMNS + " FROM jade_team_tasks WHERE root_run_id = #{rootRunId} "
+            + "ORDER BY task_id ASC LIMIT #{limit}")
+    List<TeamTaskRow> listTasks(@Param("rootRunId") String rootRunId, @Param("limit") int limit);
 
     @Update("UPDATE jade_team_tasks SET revision = #{next.revision}, subject = #{next.subject}, "
             + "description = #{next.description}, status = #{next.status}, owner_id = #{next.ownerId}, "

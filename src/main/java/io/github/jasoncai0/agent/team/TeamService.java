@@ -81,7 +81,7 @@ public final class TeamService implements AutoCloseable {
     }
 
     public boolean isRoot(AgentRun run) {
-        return !run.state().isSubagent() && run.state().parentRunId() == null;
+        return !run.state().isSubagent();
     }
 
     public boolean isLead(AgentRun run) {
@@ -121,18 +121,23 @@ public final class TeamService implements AutoCloseable {
     public TeamTask createTask(AgentRun actor, String subject, String description,
                                List<String> blockedBy, List<String> writeScopes) {
         String root = requireEnabledRoot(actor);
+        String cleanSubject = validateSubject(subject);
         synchronized (lock(root)) {
             List<TeamTask> tasks = store.list(root);
+            Map<String, TeamTask> byId = indexById(tasks);
             long active = tasks.stream().filter(t -> t.status() != TeamTaskStatus.DELETED).count();
             if (active >= MAX_TASKS) {
                 throw new IllegalArgumentException("team already has " + MAX_TASKS + " active tasks");
             }
-            for (String id : safe(blockedBy)) {
-                if (store.find(root, id).isEmpty()) {
+            List<String> deps = safe(blockedBy);
+            for (String id : deps) {
+                TeamTask blocker = byId.get(id);
+                if (blocker == null || blocker.status() == TeamTaskStatus.DELETED) {
                     throw new IllegalArgumentException("unknown blockedBy task: " + id);
                 }
             }
-            return store.create(root, subject, description, safe(blockedBy), normalizeScopes(writeScopes));
+            return store.create(root, cleanSubject, description == null ? "" : description,
+                    deps, normalizeScopes(writeScopes));
         }
     }
 
@@ -151,8 +156,12 @@ public final class TeamService implements AutoCloseable {
                                List<String> writeScopes, String owner) {
         String root = requireEnabledRoot(actor);
         synchronized (lock(root)) {
-            TeamTask task = store.find(root, taskId)
-                    .orElseThrow(() -> new IllegalArgumentException("task not found: " + taskId));
+            List<TeamTask> all = store.list(root);
+            Map<String, TeamTask> byId = indexById(all);
+            TeamTask task = byId.get(taskId);
+            if (task == null) {
+                throw new IllegalArgumentException("task not found: " + taskId);
+            }
             if (task.revision() != expectedRevision) {
                 throw new IllegalStateException("team task revision changed; refresh the board");
             }
@@ -166,7 +175,7 @@ public final class TeamService implements AutoCloseable {
                 case "claim" -> {
                     if (!task.status().active()) throw new IllegalArgumentException("only active tasks can be claimed");
                     if (task.ownerId() != null) throw new IllegalArgumentException("task already has an owner");
-                    if (!ready(root, task)) throw new IllegalArgumentException("task is blocked by unfinished dependencies");
+                    if (!ready(byId, task)) throw new IllegalArgumentException("task is blocked by unfinished dependencies");
                     yield task.ownedBy(ownerId, ownerName, TeamTaskStatus.IN_PROGRESS, System.currentTimeMillis());
                 }
                 case "release" -> {
@@ -189,22 +198,22 @@ public final class TeamService implements AutoCloseable {
                 }
                 case "edit" -> {
                     if (!privileged) throw new IllegalArgumentException("only the owner or Lead can edit");
-                    yield task.withFields(subject, description, blockedBy,
+                    String nextSubject = subject == null || subject.isBlank() ? null : validateSubject(subject);
+                    List<String> nextBlockedBy = blockedBy == null
+                            ? null
+                            : validateDependencies(byId, task.id(), blockedBy);
+                    yield task.withFields(nextSubject, description, nextBlockedBy,
                             writeScopes == null ? null : normalizeScopes(writeScopes), System.currentTimeMillis());
                 }
                 case "set_dependencies" -> {
                     if (!privileged) throw new IllegalArgumentException("only the owner or Lead can change dependencies");
-                    List<String> deps = safe(blockedBy);
-                    for (String dep : deps) {
-                        if (dep.equals(task.id())) throw new IllegalArgumentException("a task cannot block itself");
-                        if (store.find(root, dep).isEmpty()) throw new IllegalArgumentException("unknown blocker: " + dep);
-                    }
+                    List<String> deps = validateDependencies(byId, task.id(), blockedBy);
                     yield task.withFields(null, null, deps, null, System.currentTimeMillis())
                             .withStatus(TeamTaskStatus.PENDING, System.currentTimeMillis());
                 }
                 case "delete" -> {
                     if (!privileged) throw new IllegalArgumentException("only the owner or Lead can delete");
-                    for (TeamTask other : store.list(root)) {
+                    for (TeamTask other : all) {
                         if (other.status() != TeamTaskStatus.DELETED && other.blockedBy().contains(task.id())) {
                             throw new IllegalArgumentException("task is still a dependency of " + other.id());
                         }
@@ -439,10 +448,80 @@ public final class TeamService implements AutoCloseable {
                 .anyMatch(m -> m.name().equals(name));
     }
 
-    private boolean ready(String root, TeamTask task) {
+    public void cancelRoot(String rootRunId) {
+        if (rootRunId == null || rootRunId.isBlank()) {
+            return;
+        }
+        for (TeamMember member : membersByRoot.getOrDefault(rootRunId, new CopyOnWriteArrayList<>())) {
+            member.inbox().clear();
+            member.run().permissions().cancelAll("root session cancelled");
+            member.run().questions().cancelAll("root session cancelled");
+            member.run().control().cancel();
+            member.close();
+        }
+    }
+
+    private static Map<String, TeamTask> indexById(List<TeamTask> tasks) {
+        Map<String, TeamTask> byId = new LinkedHashMap<>();
+        for (TeamTask task : tasks) {
+            byId.put(task.id(), task);
+        }
+        return byId;
+    }
+
+    private static String validateSubject(String subject) {
+        if (subject == null || subject.isBlank()) {
+            throw new IllegalArgumentException("subject is required");
+        }
+        String clean = subject.trim();
+        if (clean.length() > 200) {
+            throw new IllegalArgumentException("subject must be at most 200 characters");
+        }
+        return clean;
+    }
+
+    private static List<String> validateDependencies(Map<String, TeamTask> byId, String taskId,
+                                                     List<String> rawDeps) {
+        List<String> deps = safe(rawDeps);
+        for (String dep : deps) {
+            if (dep.equals(taskId)) {
+                throw new IllegalArgumentException("a task cannot block itself");
+            }
+            TeamTask target = byId.get(dep);
+            if (target == null || target.status() == TeamTaskStatus.DELETED) {
+                throw new IllegalArgumentException("unknown blocker: " + dep);
+            }
+            if (reaches(byId, dep, taskId, new java.util.HashSet<>())) {
+                throw new IllegalArgumentException("dependency cycle detected between " + taskId + " and " + dep);
+            }
+        }
+        return deps;
+    }
+
+    private static boolean reaches(Map<String, TeamTask> byId, String currentId,
+                                   String goalId, java.util.Set<String> visited) {
+        if (currentId.equals(goalId)) {
+            return true;
+        }
+        if (!visited.add(currentId)) {
+            return false;
+        }
+        TeamTask node = byId.get(currentId);
+        if (node == null || node.status() == TeamTaskStatus.DELETED) {
+            return false;
+        }
+        for (String next : node.blockedBy()) {
+            if (reaches(byId, next, goalId, visited)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean ready(Map<String, TeamTask> byId, TeamTask task) {
         for (String id : task.blockedBy()) {
-            Optional<TeamTask> blocker = store.find(root, id);
-            if (blocker.isEmpty() || blocker.get().status() != TeamTaskStatus.COMPLETED) return false;
+            TeamTask blocker = byId.get(id);
+            if (blocker == null || blocker.status() != TeamTaskStatus.COMPLETED) return false;
         }
         return true;
     }

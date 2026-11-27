@@ -171,4 +171,67 @@ class TeamServiceTest {
         }
     }
 
+    @Test
+    void teammateContinuationLoadsOwnTranscriptLeadGetsTeamPolicyForkSupportsTeamAndCyclesAreBlocked() throws Exception {
+        Path skills = Files.createDirectories(temp.resolve("skills"));
+        Path workspaces = Files.createDirectories(temp.resolve("workspaces"));
+        AgentSettings settings = new AgentSettings(4, 4, 20_000, 10, false,
+                PermissionMode.BYPASS, 0, false, 0, true, false);
+        AppConfig config = new AppConfig(temp, skills, workspaces,
+                new LlmSettings("sk-test", "http://127.0.0.1:1", "fake", 5, 1024),
+                settings, new ServerSettings("127.0.0.1", 0), null, null, true);
+
+        java.util.concurrent.atomic.AtomicReference<String> leadSystemPrompt = new java.util.concurrent.atomic.AtomicReference<>("");
+        java.util.concurrent.atomic.AtomicReference<List<ChatMessage>> workerFollowUpMessages = new java.util.concurrent.atomic.AtomicReference<>(List.of());
+
+        LlmClient llm = request -> {
+            String sys = request.messages().get(0).content();
+            String lastUser = request.messages().get(request.messages().size() - 1).content();
+            if (lastUser != null && lastUser.contains("UNIQUE_LEAD_MARKER")) {
+                leadSystemPrompt.set(sys);
+                return new ChatResult("lead-only-answer", null, List.of(), "stop", Usage.ZERO);
+            }
+            if (lastUser != null && lastUser.contains("worker-first-turn")) {
+                return new ChatResult("worker-first-answer", null, List.of(), "stop", Usage.ZERO);
+            }
+            if (lastUser != null && lastUser.equals("worker-second-turn")) {
+                workerFollowUpMessages.set(List.copyOf(request.messages()));
+                return new ChatResult("worker-second-answer", null, List.of(), "stop", Usage.ZERO);
+            }
+            return new ChatResult("done", null, List.of(), "stop", Usage.ZERO);
+        };
+
+        try (AgentService service = new AgentService(config, llm)) {
+            var rootSnap = service.start("UNIQUE_LEAD_MARKER", "team-isolation");
+            assertEquals("SUCCEEDED", service.await(rootSnap.id(), Duration.ofSeconds(5)).status());
+            assertTrue(leadSystemPrompt.get().contains("## Team mode (enabled)"),
+                    "Lead session must receive team policy in system prompt");
+
+            AgentRun root = service.require(rootSnap.id());
+            TeamService team = service.team();
+            team.spawn(root, "worker", "worker-first-turn");
+            team.waitFor(root, List.of("worker"), 5_000);
+            team.send(root, "worker", "worker-second-turn");
+            team.waitFor(root, List.of("worker"), 5_000);
+
+            List<ChatMessage> history = workerFollowUpMessages.get();
+            assertTrue(history.stream().anyMatch(m -> m.content() != null && m.content().contains("worker-first-answer")),
+                    "Teammate continuation must load its own first-turn answer");
+            assertFalse(history.stream().anyMatch(m -> m.content() != null && m.content().contains("lead-only-answer")),
+                    "Teammate continuation must never load Lead transcript");
+
+            TeamTask t1 = team.createTask(root, "Task 1", "", List.of(), List.of());
+            TeamTask t2 = team.createTask(root, "Task 2", "", List.of(t1.id()), List.of());
+            TeamTask t3 = team.createTask(root, "Task 3", "", List.of(t2.id()), List.of());
+            assertThrows(IllegalArgumentException.class, () ->
+                    team.updateTask(root, t1.id(), "set_dependencies", t1.revision(), null, null, List.of(t3.id()), null, null));
+            assertThrows(IllegalArgumentException.class, () ->
+                    team.updateTask(root, t1.id(), "edit", t1.revision(), null, null, List.of(t3.id()), null, null));
+
+            var forked = service.fork(rootSnap.id(), "fork-team");
+            Map<String, Object> forkTeam = service.setTeamEnabled(forked.runId(), true);
+            assertEquals(Boolean.TRUE, forkTeam.get("enabled"));
+        }
+    }
+
 }

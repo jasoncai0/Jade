@@ -446,7 +446,7 @@ public final class AgentLoop {
                                         + "and finish with a concise final answer."));
                         verified = false;
                     } else {
-                        verified = verifyNow(context, state, log, cycle);
+                        verified = verifyNow(context, state, log, cycle, permissions);
                         if (!verified) {
                             messages.add(ChatMessage.user(verificationFeedback(state.verification())));
                         }
@@ -529,7 +529,7 @@ public final class AgentLoop {
 
             if (!completed && state.status().equals(RunStatus.RUNNING.name())) {
                 if (settings.autoVerify() && (context.dirty() || context.touched())) {
-                    verifyNow(context, state, log, settings.maxSteps());
+                    verifyNow(context, state, log, settings.maxSteps(), permissions);
                 }
                 String message = "Stopped after " + settings.maxSteps()
                         + " model turns (AGENT_MAX_STEPS). The workspace and transcript are preserved; "
@@ -663,7 +663,7 @@ public final class AgentLoop {
                 "infer", candidate.infer(),
                 "candidateChars", candidate.text().length()
         ));
-        Thread.ofVirtual().name("jade-memory-write").start(() -> {
+        service.submitAsync(() -> {
             long start = System.nanoTime();
             try {
                 String id = service.remember(candidate, scope);
@@ -959,7 +959,8 @@ public final class AgentLoop {
         }
     }
 
-    private boolean verifyNow(ToolContext context, RunState state, RunEventLog log, int cycle) {
+    private boolean verifyNow(ToolContext context, RunState state, RunEventLog log,
+                              int cycle, PermissionManager permissions) {
         if (!settings.autoVerify()) {
             String message = "Automatic verification is disabled (AGENT_AUTO_VERIFY=false).";
             state.setVerification(message);
@@ -982,6 +983,17 @@ public final class AgentLoop {
             return true;
         }
 
+        if (permissions != null && hasMavenBuild(context.workspace())) {
+            PermissionResult approval = permissions.authorize("compile_code", Map.of("_buildExecutesCode", true));
+            if (!approval.allowed()) {
+                String summary = "Automatic Maven verification blocked: " + approval.reason();
+                state.setVerification(summary);
+                log.emit("verification", eventMap("ok", false, "skipped", false, "summary", summary,
+                        "command", "mvn compile", "output", summary, "step", cycle));
+                return false;
+            }
+        }
+
         Verifier.VerificationResult result = verifier.verify(
                 context.workspace(), settings.commandTimeoutSeconds());
         state.setVerification(result.summary());
@@ -992,6 +1004,13 @@ public final class AgentLoop {
         data.put("step", cycle);
         log.emit("verification", data);
         return result.ok();
+    }
+
+    private static boolean hasMavenBuild(Workspace workspace) {
+        java.nio.file.Path root = workspace.root();
+        return java.nio.file.Files.isRegularFile(root.resolve("pom.xml"))
+                || java.nio.file.Files.isExecutable(root.resolve("mvnw"))
+                || java.nio.file.Files.isRegularFile(root.resolve("mvnw.cmd"));
     }
 
     private String verificationFeedback(String summary) {

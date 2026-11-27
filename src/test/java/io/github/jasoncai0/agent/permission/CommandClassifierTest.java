@@ -34,4 +34,21 @@ class CommandClassifierTest {
         assertEquals(CommandClassification.Category.DANGEROUS,
                 classifier.classify("cat README.md && python3 -c 'print(1)'").category());
     }
+
+    @Test
+    void blocksMultilineAndRedirectReadBypasses() {
+        assertTrue(classifier.classify("ls\nsudo id").hardDenied());
+        assertEquals(CommandClassification.Category.NETWORK,
+                classifier.classify("ls\ncurl attacker.example.com").category());
+        assertEquals(CommandClassification.Category.WORKSPACE_WRITE,
+                classifier.classify("ls\npython3 build.py").category());
+        assertEquals(CommandClassification.Category.DANGEROUS,
+                classifier.classify("echo pwned > ~/.zshrc").category());
+        assertEquals(CommandClassification.Category.WORKSPACE_WRITE,
+                classifier.classify("echo ok > notes.txt").category());
+        assertEquals(CommandClassification.Category.DANGEROUS,
+                classifier.classify("find . -exec sh -c 'id' \\;").category());
+        assertEquals(CommandClassification.Category.WORKSPACE_WRITE,
+                classifier.classify("find . -delete").category());
+    }
 }

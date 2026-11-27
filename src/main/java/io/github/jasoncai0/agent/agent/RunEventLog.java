@@ -14,6 +14,7 @@ public final class RunEventLog {
     private final String runId;
     private final EventStore store;
     private long nextSeq = 1;
+    private long persistedDiskSeq;
     private boolean closed;
 
     public RunEventLog() {
@@ -30,6 +31,24 @@ public final class RunEventLog {
     public static RunEventLog restored(String runId, EventStore store, long lastSeq) {
         RunEventLog log = new RunEventLog(runId, store);
         log.nextSeq = Math.max(1, lastSeq + 1);
+        log.persistedDiskSeq = Math.max(0, lastSeq);
+        log.closed = true;
+        return log;
+    }
+
+    /** Closed log pre-populated with copied events (used by batch fork import). */
+    public static RunEventLog restoredWithEvents(String runId, EventStore store, List<AgentEvent> persisted) {
+        RunEventLog log = new RunEventLog(runId, store);
+        if (persisted != null) {
+            log.events.addAll(persisted.stream()
+                    .sorted(Comparator.comparingLong(AgentEvent::seq))
+                    .toList());
+            long maxSeq = log.events.stream()
+                    .mapToLong(AgentEvent::seq)
+                    .max()
+                    .orElse(0L);
+            log.nextSeq = maxSeq + 1;
+        }
         log.closed = true;
         return log;
     }
@@ -44,10 +63,12 @@ public final class RunEventLog {
             log.events.addAll(persisted.stream()
                     .sorted(Comparator.comparingLong(AgentEvent::seq))
                     .toList());
-            log.nextSeq = log.events.stream()
+            long maxSeq = log.events.stream()
                     .mapToLong(AgentEvent::seq)
                     .max()
-                    .orElse(0L) + 1;
+                    .orElse(0L);
+            log.nextSeq = maxSeq + 1;
+            log.persistedDiskSeq = maxSeq;
         }
         log.closed = true;
         return log;
@@ -159,5 +180,15 @@ public final class RunEventLog {
 
     public synchronized long lastSeq() {
         return nextSeq - 1;
+    }
+
+    public synchronized long persistedDiskSeq() {
+        return persistedDiskSeq;
+    }
+
+    public synchronized void markPersistedDiskSeq(long seq) {
+        if (seq > persistedDiskSeq) {
+            persistedDiskSeq = seq;
+        }
     }
 }

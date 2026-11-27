@@ -65,6 +65,22 @@ class MemoryPolicyTest {
         assertEquals(1, twice.get(0).content().split(MemoryContext.MARKER, -1).length - 1);
     }
 
+    @Test
+    void sharesProjectIdAcrossRunDirectoriesUnderSameWorkspacesRoot() {
+        MemorySettings settings = MemorySettings.defaults();
+        java.nio.file.Path workspacesRoot = java.nio.file.Path.of("/tmp/jade-project/agent-workspaces");
+        MemoryScope run1 = MemoryPolicy.scope(settings, workspacesRoot.resolve("run-1"), workspacesRoot, "run-1");
+        MemoryScope run2 = MemoryPolicy.scope(settings, workspacesRoot.resolve("run-2"), workspacesRoot, "run-2");
+        MemoryScope mgmt = MemoryPolicy.scope(settings, workspacesRoot, workspacesRoot, "management");
+        MemoryScope other = MemoryPolicy.scope(settings,
+                java.nio.file.Path.of("/tmp/other-project/agent-workspaces/run-1"),
+                java.nio.file.Path.of("/tmp/other-project/agent-workspaces"), "run-1");
+
+        assertEquals(run1.projectId(), run2.projectId());
+        assertEquals(run1.projectId(), mgmt.projectId());
+        assertFalse(run1.projectId().equals(other.projectId()));
+    }
+
     private static MemoryItem item(String id, double score, String scope) {
         return new MemoryItem(id, "text " + id, score, "fact", scope,
                 "global".equals(scope) ? "global" : "project-a", "test", "", java.util.Map.of());

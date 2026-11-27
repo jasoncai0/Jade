@@ -34,15 +34,16 @@ public final class CommandRunner {
             .toLowerCase().contains("win");
     private static final Set<String> SENSITIVE_EXACT = Set.of(
             "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GH_TOKEN", "GITHUB_TOKEN",
-            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"
+            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+            "DATABASE_URL", "JDBC_URL", "KUBECONFIG", "JADE_MYSQL_PASSWORD"
     );
     private static final List<Pattern> BLOCKED = List.of(
-            Pattern.compile("(?i)(^|[;&|]\\s*)sudo(\\s|$)"),
-            Pattern.compile("(?i)(^|[;&|]\\s*)(shutdown|reboot|halt|poweroff)(\\s|$)"),
-            Pattern.compile("(?i)(^|[;&|]\\s*)(mkfs|fdisk|parted)(\\s|$)"),
-            Pattern.compile("(?i)\\bdd\\s+if=.*\\bof=/dev/"),
+            Pattern.compile("(?im)(^|[;&|]\\s*)(sudo|su|doas)(\\s|$)"),
+            Pattern.compile("(?im)(^|[;&|]\\s*)(shutdown|reboot|halt|poweroff)(\\s|$)"),
+            Pattern.compile("(?im)(^|[;&|]\\s*)(mkfs|fdisk|parted)(\\s|$)"),
+            Pattern.compile("(?im)\\bdd\\s+if=.*\\bof=/dev/"),
             Pattern.compile(":\\s*\\(\\s*\\)\\s*\\{"),
-            Pattern.compile("(?i)\\brm\\s+-[a-z]*r[a-z]*f[a-z]*\\s+/(\\s|$)")
+            Pattern.compile("(?im)\\brm\\s+-[a-z]*r[a-z]*f[a-z]*\\s+(/|~)(\\s|$)")
     );
 
     public CommandResult run(List<String> argv, Path cwd, int timeoutSeconds) {
@@ -176,7 +177,10 @@ public final class CommandRunner {
             if (SENSITIVE_EXACT.contains(key)
                     || key.endsWith("_API_KEY")
                     || key.endsWith("_SECRET")
-                    || key.endsWith("_TOKEN")) {
+                    || key.endsWith("_TOKEN")
+                    || key.endsWith("_PASSWORD")
+                    || key.endsWith("_PASSWD")
+                    || key.endsWith("_PRIVATE_KEY")) {
                 remove.add(key);
             }
         }

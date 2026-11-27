@@ -103,7 +103,7 @@ public final class AgentService implements AutoCloseable {
         this.skills = SkillRegistry.load(config.skillsDir());
         this.tools = BuiltInTools.registry();
         this.mcp = McpManager.connect(config.projectRoot(), this.tools);
-        this.memory = MemoryServices.create(config.memory());
+        this.memory = MemoryServices.create(config.memory(), config.workspacesDir());
         this.team = new TeamService(this, TeamStores.create(config.mysql()), config.teamDefault());
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
@@ -318,24 +318,25 @@ public final class AgentService implements AutoCloseable {
                 forkSeq
         );
         RunState state = RunState.restore(forkSnapshot);
-        RunEventLog events = new RunEventLog(newId, eventStore);
+        List<AgentEvent> copiedEvents = new ArrayList<>(parentEvents.size() + 1);
         for (AgentEvent event : parentEvents) {
-            events.append(new AgentEvent(event.seq(), event.timestamp(), event.type(),
+            copiedEvents.add(new AgentEvent(event.seq(), event.timestamp(), event.type(),
                     rebase(event.data(), parentId, newId, parentWorkspace, directoryName)));
         }
-        events.append(new AgentEvent(forkSeq + 1, now, "fork.created", Map.of(
+        copiedEvents.add(new AgentEvent(forkSeq + 1, now, "fork.created", Map.of(
                 "parentRunId", parentId,
                 "parentSeq", forkSeq,
                 "workspace", directoryName,
                 "task", parentSnapshot.task()
         )));
-        events.close();
+        RunEventLog events = RunEventLog.restoredWithEvents(newId, eventStore, copiedEvents);
 
         AgentRun run = new AgentRun(newId, target, state, events);
         runs.put(newId, run);
+        team.ensureRoot(newId);
         RunArtifacts.persist(target, state.snapshot(), messages, events);
         if (eventStore != null) {
-            eventStore.saveSnapshot(state.snapshot());
+            eventStore.importRun(state.snapshot(), copiedEvents);
         }
         Log.info("agent.run.forked", Map.of(
                 "runId", newId,
@@ -560,7 +561,7 @@ public final class AgentService implements AutoCloseable {
                     .withLiveDeltas(run.deltas())
                     .withTeamPolicy(team.teamPolicy(run));
             RunSnapshot snapshot = continuation
-                    ? loop.continueSession(userMessage, RunArtifacts.loadMessages(run.workspace().root()),
+                    ? loop.continueSession(userMessage, RunArtifacts.loadMessages(run.workspace().root(), run.id()),
                             run.workspace(), run.state(), run.events(), control)
                     : loop.run(userMessage, run.workspace(), run.state(), run.events(), control);
             completion.complete(snapshot);
@@ -595,7 +596,8 @@ public final class AgentService implements AutoCloseable {
                     llm, toolsForRun(run), skills, config.agent(), config.llm().maxOutputTokens(),
                     new Verifier(), run.permissions(), run.permissionSession(), run.questions(),
                     new LlmGoalReviewer(llm), memory)
-                    .withLiveDeltas(run.deltas());
+                    .withLiveDeltas(run.deltas())
+                    .withTeamPolicy(team.teamPolicy(run));
             RunSnapshot snapshot = continuation
                     ? loop.continueSession(userMessage, RunArtifacts.loadMessages(workspace.root()),
                             workspace, state, events, control)
@@ -646,6 +648,7 @@ public final class AgentService implements AutoCloseable {
         if (children != null) {
             children.cancelChildren(id);
         }
+        team.cancelRoot(id);
         run.permissions().cancelAll("run cancelled");
         run.questions().cancelAll("run cancelled");
         run.control().cancel();
@@ -960,12 +963,14 @@ public final class AgentService implements AutoCloseable {
         if (eventStore == null) {
             List<AgentEvent> events = require(id).events().snapshot();
             long max = events.stream().mapToLong(AgentEvent::seq).max().orElse(0);
-            List<AgentEvent> tail = events.stream()
+            List<AgentEvent> filtered = events.stream()
                     .filter(e -> before <= 0 || e.seq() < before)
-                    .skip(Math.max(0, events.size() - limit))
                     .toList();
+            int safeLimit = Math.max(1, limit);
+            int from = Math.max(0, filtered.size() - safeLimit);
+            List<AgentEvent> tail = filtered.subList(from, filtered.size());
             long next = tail.isEmpty() ? before : tail.get(0).seq();
-            return new EventStore.Page(tail, next, false, max, events.size());
+            return new EventStore.Page(tail, next, from > 0, max, events.size());
         }
         return eventStore.page(id, before, limit, compact);
     }

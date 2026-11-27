@@ -459,7 +459,8 @@ public final class CodingAgentApplication {
         if (options.port() != null || options.host() != null) {
             server = new ServerSettings(
                     options.host() == null ? server.host() : options.host(),
-                    options.port() == null ? server.port() : options.port());
+                    options.port() == null ? server.port() : options.port(),
+                    server.authToken());
         }
         return new AppConfig(config.projectRoot(), config.skillsDir(), config.workspacesDir(),
                 config.llm(), agent, server, config.mysql(), config.memory(), config.teamDefault());

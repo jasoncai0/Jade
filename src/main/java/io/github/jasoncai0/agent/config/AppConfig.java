@@ -76,7 +76,8 @@ public record AppConfig(
         );
         ServerSettings server = new ServerSettings(
                 value(get, "AGENT_HOST", "127.0.0.1"),
-                integer(get, "AGENT_PORT", 8080, 0, 65_535)
+                integer(get, "AGENT_PORT", 8080, 0, 65_535),
+                value(get, "AGENT_WEB_TOKEN", "")
         );
         MysqlSettings mysql = new MysqlSettings(
                 value(get, "JADE_MYSQL_URL", MysqlSettings.DEFAULT_URL),
@@ -94,7 +95,8 @@ public record AppConfig(
                         50, 10_000),
                 integer(get, "AGENT_MEMORY_WRITE_TIMEOUT_MS", MemorySettings.DEFAULT_WRITE_TIMEOUT_MS,
                         100, 30_000),
-                bool(get, "AGENT_MEMORY_TELEMETRY", true)
+                bool(get, "AGENT_MEMORY_TELEMETRY", true),
+                value(get, "AGENT_MEMORY_PROJECT_ID", "")
         );
         return new AppConfig(
                 root,

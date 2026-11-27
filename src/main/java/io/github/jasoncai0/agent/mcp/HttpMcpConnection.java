@@ -35,7 +35,7 @@ final class HttpMcpConnection extends McpConnection {
         this.timeout = Duration.ofSeconds(config.timeoutSeconds());
         this.http = HttpClient.newBuilder()
                 .connectTimeout(timeout)
-                .followRedirects(HttpClient.Redirect.NORMAL)
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
     }
 

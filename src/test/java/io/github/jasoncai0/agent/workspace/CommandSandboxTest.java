@@ -56,4 +56,11 @@ class CommandSandboxTest {
         assertTrue(result.stdout().contains(workspace.toRealPath().toString()),
                 "java.io.tmpdir must point at the workspace: " + result.stdout());
     }
+
+    @Test
+    void blocksMultilineSudoInRunnerGuard() {
+        org.junit.jupiter.api.Assertions.assertThrows(
+                CommandRunner.CommandRejectedException.class,
+                () -> CommandRunner.guard("true\nsudo id"));
+    }
 }
