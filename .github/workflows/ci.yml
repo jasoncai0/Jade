@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +38,7 @@ jobs:
       - name: Run Maven tests and shaded package
         run: mvn -B verify
       - name: Run Playwright console E2E (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-24.04'
         working-directory: e2e
         run: |
           npm install --no-audit --no-fund
@@ -46,7 +46,7 @@ jobs:
           npx playwright test
 
   mysql-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       mysql:
         image: mysql:8.4
@@ -70,7 +70,7 @@ jobs:
           java-version: '21'
           cache: maven
       - name: Run MySQL store integration tests
-        run: mvn -B test -Dtest=MySqlEventStoreTest,TeamTaskStoreTest
+        run: mvn -B test -Dtest=MySqlEventStoreTest,TeamTaskStoreTest,MemoryAdmissionPipelineTest
 
   secrets:
     runs-on: ubuntu-latest
